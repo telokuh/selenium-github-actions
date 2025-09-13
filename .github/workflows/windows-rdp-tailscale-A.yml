@@ -124,8 +124,8 @@ jobs:
 
         run: |
 
-          function ToIntOr($v, $def){ if("$v" -match '^\d+$'){[int]$v}else{[int]$def} }
-
+          
+          function ToIntOr($v, $def){ if("$v" -match '^\\d+'){[int]$v}else{[int]$def} }
 
 
           $tailnet = $env:RAW_TAILNET
