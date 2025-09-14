@@ -102,6 +102,7 @@ jobs:
           name: chrome-data
           path: ${{ env.CHROME_PROFILE_PATH }}
           merge-multiple: true
+        continue-on-error: true
 
       - name: ⚙️ Install Tailscale (if missing) & show version
         run: |
