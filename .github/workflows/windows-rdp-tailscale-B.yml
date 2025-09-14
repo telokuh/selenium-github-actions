@@ -47,6 +47,7 @@ env:
   RDP_USER: Bullettemporary
   RDP_PASS: Bullet@12345
   TS_HOSTNAME: bullet
+  CHROME_PROFILE_PATH: C:\temp\chrome-profile
 
 jobs:
   rdp:
@@ -95,6 +96,13 @@ jobs:
           "loops=$loops" | Out-File -Append $env:GITHUB_OUTPUT
           Write-Host "Resolved: test=$isTest, runtime=$runtime, loops=$loops"
 
+      - name: ⬇️ Download Chrome Profile Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: chrome-data
+          path: ${{ env.CHROME_PROFILE_PATH }}
+          merge-multiple: true
+
       - name: ⚙️ Install Tailscale (if missing) & show version
         run: |
           $exe = "C:\Program Files\Tailscale\tailscale.exe"
@@ -121,6 +129,18 @@ jobs:
           }
           Set-ItemProperty "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name fDenyTSConnections -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop" | Out-Null
+          
+      - name: 📂 Copy Profile to RDP User
+        run: |
+          $sourcePath = "${{ env.CHROME_PROFILE_PATH }}\"
+          $destPath = "C:\Users\${{ env.RDP_USER }}\AppData\Local\Google\Chrome\User Data\"
+          
+          if (Test-Path $sourcePath) {
+            Write-Host "Copying Chrome profile from temporary location..."
+            Copy-Item -Path "$sourcePath*" -Destination "$destPath" -Recurse -Force
+          } else {
+            Write-Warning "Chrome profile artifact not found. Starting with a fresh profile."
+          }
 
       - name: 🧹 PURGE any devices containing 'bullet' (startup)
         run: |
@@ -168,7 +188,28 @@ jobs:
             Write-Host "RDP alive... ($left min left)"
             Start-Sleep -Seconds 60
           }
+          
+      - name: ⬆️ Upload Chrome Profile Artifact
+        if: always()
+        run: |
+          $sourcePath = "C:\Users\${{ env.RDP_USER }}\AppData\Local\Google\Chrome\User Data\"
+          $destPath = "${{ env.CHROME_PROFILE_PATH }}"
+          
+          if (Test-Path $sourcePath) {
+            Write-Host "Copying Chrome profile to temporary location..."
+            if (-not (Test-Path $destPath)) { New-Item -Path $destPath -ItemType Directory | Out-Null }
+            Copy-Item -Path "$sourcePath*" -Destination "$destPath" -Recurse -Force
+          } else {
+            Write-Warning "Chrome profile not found. No data to save."
+          }
 
+      - name: 📤 Upload Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chrome-data
+          path: ${{ env.CHROME_PROFILE_PATH }}
+          
       - name: 🧹 PURGE any devices containing 'bullet' (exit)
         if: always()
         run: |
