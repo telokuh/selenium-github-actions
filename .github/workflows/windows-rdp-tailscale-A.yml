@@ -93,14 +93,6 @@ jobs:
           "loops=$loops" | Out-File -Append $env:GITHUB_OUTPUT
           Write-Host "Resolved: test=$isTest, runtime=$runtime, loops=$loops"
 
-      - name: ⬇️ Download Chrome Profile Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: chrome-data
-          path: ${{ env.CHROME_PROFILE_PATH }}
-          merge-multiple: true
-        continue-on-error: true
-
       - name: ⚙️ Install Tailscale (if missing) & show version
         run: |
           $exe = "C:\Program Files\Tailscale\tailscale.exe"
@@ -176,6 +168,14 @@ jobs:
           "derp=$derp" | Out-File -Append $env:GITHUB_OUTPUT
 
           "### RDP (A)`nHost: $env:TS_HOSTNAME`nIPv4: $ip4`nMagicDNS: $fqdn`nDERP: $derp`nUser: $env:RDP_USER`nPass: $env:RDP_PASS" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: ⬇️ Download Chrome Profile Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: chrome-data
+          path: ${{ env.CHROME_PROFILE_PATH }}
+          merge-multiple: true
+        continue-on-error: true
 
       - name: ⏳ Keep alive
         run: |
