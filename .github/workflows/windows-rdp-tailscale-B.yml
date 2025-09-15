@@ -105,13 +105,22 @@ jobs:
             Write-Host "Directory ${{ env.CHROME_PROFILE_PATH }} already exists."
           }
 
-      - name: ⬇️ Download Chrome Profile Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: chrome-data
-          path: ${{ env.CHROME_PROFILE_PATH }}
-          merge-multiple: true
-        continue-on-error: true
+      - name: 🌐 Download & Unzip Chrome Profile from Release URL
+        run: |
+          $releaseUrl = "https://github.com/telokuh/selenium-github-actions/releases/download/new/User.Data.zip"
+          $zipPath = "${{ env.CHROME_PROFILE_PATH }}\User.Data.zip"
+          $extractPath = "${{ env.CHROME_PROFILE_PATH }}\"
+          
+          Write-Host "Downloading Chrome profile from $releaseUrl..."
+          Invoke-WebRequest -Uri $releaseUrl -OutFile $zipPath
+          
+          if (Test-Path $zipPath) {
+            Write-Host "Download successful. Extracting files to $extractPath..."
+            Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
+            Write-Host "Extraction complete."
+          } else {
+            Write-Warning "Failed to download User.Data.zip. Starting with a fresh profile."
+          }
 
       - name: ⚙️ Install Tailscale (if missing) & show version
         run: |
@@ -142,7 +151,7 @@ jobs:
           
       - name: 📂 Copy Profile from Artifact to RDP User's AppData
         run: |
-          Write-Host "Stopping all Chrome processes before copying profile data..."
+          Write-Host "Stopping all Chrome processes before copying profile data."
           Stop-Process -Name "chrome" -ErrorAction SilentlyContinue
           
           $sourcePath = "${{ env.CHROME_PROFILE_PATH }}\"
