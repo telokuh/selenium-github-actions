@@ -34,7 +34,8 @@ concurrency:
 
 permissions:
   contents: read
-  actions: write
+  actions: read
+  actions: write # Memungkinkan dispatch workflow lain
 
 defaults:
   run:
@@ -44,7 +45,7 @@ env:
   RDP_USER: Bullettemporary
   RDP_PASS: Bullet@12345
   TS_HOSTNAME: bullet
-  CHROME_PROFILE_PATH: C:\temp\chrome-profile
+  CHROME_PROFILE_PATH: C:\temp\chrome-profile # Direktori sementara untuk artefak
 
 jobs:
   rdp:
@@ -106,22 +107,23 @@ jobs:
         id: download-artifact
         uses: actions/download-artifact@v4
         with:
-          name: chrome-data.zip
-          path: ${{ env.CHROME_PROFILE_PATH }}
+          name: chrome-data
+          path: ${{ env.CHROME_PROFILE_PATH }} # Artefak akan diunduh ke C:\temp\chrome-profile
         continue-on-error: true
 
       - name: 🌐 Download & Unzip Chrome Profile from Release URL (jika artefak tidak ditemukan)
         if: steps.download-artifact.outcome == 'failure'
         run: |
-          $releaseUrl = "https://github.com/telokuh/selenium-github-actions/actions/runs/17740690694/artifacts/4015285434"
-          $zipPath = "${{ env.CHROME_PROFILE_PATH }}\chrome-data.zip"
-          $extractPath = "${{ env.CHROME_PROFILE_PATH }}\"
-          
+          $releaseUrl = "https://github.com/telokuh/selenium-github-actions/releases/download/new/User.data.zip" # Nama file zip
+          $zipPath = "${{ env.CHROME_PROFILE_PATH }}\User.data.zip" # Lokasi download zip
+          $extractPath = "${{ env.CHROME_PROFILE_PATH }}" # Lokasi ekstraksi zip
+
           Write-Host "Tidak ada artefak yang ditemukan. Mengunduh profil dari GitHub Release..."
           try {
             Invoke-WebRequest -Uri $releaseUrl -OutFile $zipPath
             Write-Host "Download successful. Extracting files to $extractPath..."
-            Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
+            # Expand-Archive akan membuat folder 'User Data' di dalam $extractPath
+            Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force 
             Write-Host "Extraction complete."
           } catch {
             Write-Warning "Gagal mengunduh atau mengekstrak profil dari rilis. Memulai dengan profil kosong."
@@ -154,20 +156,31 @@ jobs:
           Set-ItemProperty "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name fDenyTSConnections -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop" | Out-Null
 
-      - name: 📂 Copy Profile from Artifact to RDP User's AppData
+      - name: 📂 Copy Profile from Extracted Zip to RDP User's AppData
         run: |
           Write-Host "Stopping all Chrome processes before copying profile data..."
-          Stop-Process -Name "chrome" -ErrorAction SilentlyContinue
+          try {
+            Stop-Process -Name "chrome" -Force -ErrorAction Stop
+            Write-Host "Chrome processes stopped."
+          } catch {
+            Write-Host "No Chrome processes were running. Continuing..."
+          }
           
-          $sourcePath = "${{ env.CHROME_PROFILE_PATH }}\"
-          $destPath = "C:\Users\${{ env.RDP_USER }}\AppData\Local\Google\Chrome\User Data\"
+          # Lokasi sumber setelah ekstraksi zip (ini yang baru)
+          $sourcePath = "${{ env.CHROME_PROFILE_PATH }}\User Data\" 
+          # Lokasi tujuan di AppData user RDP
+          $destPath = "C:\Users\${{ env.RDP_USER }}\AppData\Local\Google\Chrome\User Data\" 
           
           if ((Test-Path $sourcePath) -and ((Get-ChildItem -Path $sourcePath -Recurse -File | Measure-Object).Count -gt 0)) {
-            Write-Host "Copying Chrome profile from temporary location to RDP user's AppData..."
+            Write-Host "Copying Chrome profile from extracted zip to RDP user's AppData..."
+            # Pastikan direktori tujuan ada, jika tidak, buat dulu
+            if (-not (Test-Path $destPath)) {
+              New-Item -Path $destPath -ItemType Directory | Out-Null
+            }
             Copy-Item -Path "$sourcePath*" -Destination "$destPath" -Recurse -Force
             Write-Host "Copy successful. Files copied: $((Get-ChildItem -Path $destPath -Recurse -File | Measure-Object).Count)"
           } else {
-            Write-Warning "Chrome profile artifact not found or empty. Starting with a fresh profile."
+            Write-Warning "Chrome profile data not found after extraction or artifact missing. Starting with a fresh profile."
           }
 
       - name: 🧹 PURGE any devices containing 'bullet' (startup)
@@ -239,12 +252,19 @@ jobs:
         if: always()
         run: |
           Write-Host "Menghentikan semua proses Chrome sebelum menyalin data profil..."
-          Stop-Process -Name "chrome" -ErrorAction SilentlyContinue
+          try {
+            Stop-Process -Name "chrome" -Force -ErrorAction Stop
+            Write-Host "Chrome processes stopped."
+          } catch {
+            Write-Host "No Chrome processes were running. Continuing..."
+          }
           
-          $sourcePath = "C:\Users\${{ env.RDP_USER }}\AppData\Local\Google\Chrome\User Data\"
-          $destPath = "${{ env.CHROME_PROFILE_PATH }}"
+          # Lokasi sumber data chrome di AppData user RDP
+          $sourcePath = "C:\Users\${{ env.RDP_USER }}\AppData\Local\Google\Chrome\User Data\" 
+          # Lokasi tujuan di direktori artefak sementara
+          $destPath = "${{ env.CHROME_PROFILE_PATH }}" 
           
-          # Bersihkan direktori tujuan
+          # Bersihkan direktori tujuan artefak sementara jika ada
           Write-Host "Membersihkan direktori artefak sementara: $destPath"
           if (Test-Path $destPath) {
               Get-ChildItem -Path $destPath -Recurse | Remove-Item -Recurse -Force
@@ -252,7 +272,7 @@ jobs:
           
           # Salin data dengan penanganan kesalahan
           if (Test-Path $sourcePath) {
-              Write-Host "Menyalin profil Chrome yang diperbarui dari AppData..."
+              Write-Host "Menyalin profil Chrome yang diperbarui dari AppData ke direktori artefak..."
               $files = Get-ChildItem -Path $sourcePath -Recurse
               $copiedCount = 0
               $skippedCount = 0
@@ -267,7 +287,7 @@ jobs:
               }
               Write-Host "Penyalinan selesai. Total file disalin: $copiedCount, dilewati: $skippedCount."
           } else {
-              Write-Warning "Profil Chrome tidak ditemukan. Tidak ada data yang disimpan."
+              Write-Warning "Profil Chrome tidak ditemukan di AppData. Tidak ada data yang disimpan ke artefak."
           }
 
       - name: 📤 Unggah Artifact
@@ -275,7 +295,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: chrome-data
-          path: ${{ env.CHROME_PROFILE_PATH }}
+          path: ${{ env.CHROME_PROFILE_PATH }} # Unggah seluruh isi direktori sementara
           
       - name: 🧹 PURGE any devices containing 'bullet' (exit)
         if: always()
