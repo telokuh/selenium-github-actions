@@ -116,7 +116,7 @@ jobs:
       - name: 🌐 Download & Unzip Chrome Profile from Release URL (jika artefak tidak ditemukan)
         if: steps.download-artifact.outcome == 'failure'
         run: |
-          $releaseUrl = "https://github.com/telokuh/selenium-github-actions/releases/download/new/User.Data.zip"
+          $releaseUrl = "https://github.com/telokuh/selenium-github-actions/actions/runs/17740690694/artifacts/4015285434"
           $zipPath = "${{ env.CHROME_PROFILE_PATH }}\User.Data.zip"
           $extractPath = "${{ env.CHROME_PROFILE_PATH }}\"
           
