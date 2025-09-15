@@ -65,7 +65,7 @@ jobs:
           RAW_RUNTIME: ${{ inputs.runtime_minutes || '355' }}
           RAW_LOOPS: ${{ inputs.loops || '0' }}
         run: |
-          function ToIntOr($v, $def){ if("$v" -match '^\d+$'){[int]$v}else{[int]$def} }
+          function ToIntOr($v, $def){ if("$v" -match '^\d+$'){$v}else{$def} }
 
           $tailnet = $env:RAW_TAILNET
           $apiKey = $env:RAW_APIKEY
@@ -95,6 +95,15 @@ jobs:
           "runtime=$runtime" | Out-File -Append $env:GITHUB_OUTPUT
           "loops=$loops" | Out-File -Append $env:GITHUB_OUTPUT
           Write-Host "Resolved: test=$isTest, runtime=$runtime, loops=$loops"
+
+      - name: 📂 Ensure temporary chrome profile directory exists
+        run: |
+          if (-not (Test-Path "${{ env.CHROME_PROFILE_PATH }}")) {
+            New-Item -Path "${{ env.CHROME_PROFILE_PATH }}" -ItemType Directory | Out-Null
+            Write-Host "Created directory: ${{ env.CHROME_PROFILE_PATH }}"
+          } else {
+            Write-Host "Directory ${{ env.CHROME_PROFILE_PATH }} already exists."
+          }
 
       - name: ⬇️ Download Chrome Profile Artifact
         uses: actions/download-artifact@v4
@@ -131,14 +140,18 @@ jobs:
           Set-ItemProperty "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name fDenyTSConnections -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop" | Out-Null
           
-      - name: 📂 Copy Profile to RDP User
+      - name: 📂 Copy Profile from Artifact to RDP User's AppData
         run: |
+          Write-Host "Stopping all Chrome processes before copying profile data."
+          Stop-Process -Name "chrome" -ErrorAction SilentlyContinue
+          
           $sourcePath = "${{ env.CHROME_PROFILE_PATH }}\"
           $destPath = "C:\Users\${{ env.RDP_USER }}\AppData\Local\Google\Chrome\User Data\"
           
-          if (Test-Path $sourcePath) {
-            Write-Host "Copying Chrome profile from temporary location..."
+          if ((Get-ChildItem -Path $sourcePath -Recurse -File | Measure-Object).Count -gt 0) {
+            Write-Host "Copying Chrome profile from temporary location to RDP user's AppData..."
             Copy-Item -Path "$sourcePath*" -Destination "$destPath" -Recurse -Force
+            Write-Host "Copy successful. Files copied: $((Get-ChildItem -Path $destPath -Recurse -File | Measure-Object).Count)"
           } else {
             Write-Warning "Chrome profile artifact not found. Starting with a fresh profile."
           }
@@ -190,16 +203,19 @@ jobs:
             Start-Sleep -Seconds 60
           }
           
-      - name: ⬆️ Upload Chrome Profile Artifact
+      - name: ⬆️ Copy Updated Profile from AppData to Artifact Location
         if: always()
         run: |
+          Write-Host "Stopping all Chrome processes before copying profile data."
+          Stop-Process -Name "chrome" -ErrorAction SilentlyContinue
+          
           $sourcePath = "C:\Users\${{ env.RDP_USER }}\AppData\Local\Google\Chrome\User Data\"
           $destPath = "${{ env.CHROME_PROFILE_PATH }}"
           
           if (Test-Path $sourcePath) {
-            Write-Host "Copying Chrome profile to temporary location..."
-            if (-not (Test-Path $destPath)) { New-Item -Path $destPath -ItemType Directory | Out-Null }
+            Write-Host "Copying updated Chrome profile from AppData to temporary location..."
             Copy-Item -Path "$sourcePath*" -Destination "$destPath" -Recurse -Force
+            Write-Host "Copy successful. Files copied: $((Get-ChildItem -Path $destPath -Recurse -File | Measure-Object).Count)"
           } else {
             Write-Warning "Chrome profile not found. No data to save."
           }
