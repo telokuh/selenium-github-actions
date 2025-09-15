@@ -155,7 +155,7 @@ jobs:
           Stop-Process -Name "chrome" -ErrorAction SilentlyContinue
           
           $sourcePath = "${{ env.CHROME_PROFILE_PATH }}\"
-          $destPath = "C:\Users\${{ env.RDP_USER }}\AppData\Local\Google\Chrome\User Data\"
+          $destPath = "C:\Users\${{ env.RDP_USER }}\AppData\Local\Google\Chrome\"
           
           # Simplified check for files to avoid multi-line YAML issues
           if ((Test-Path $sourcePath) -and ((Get-ChildItem -Path $sourcePath -Recurse -File | Measure-Object).Count -gt 0)) {
