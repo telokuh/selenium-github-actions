@@ -102,21 +102,29 @@ jobs:
             Write-Host "Directory ${{ env.CHROME_PROFILE_PATH }} already exists."
           }
 
-      - name: 🌐 Download & Unzip Chrome Profile from Release URL
+      - name: 📦 Download latest artifact `chrome-data`
+        id: download-artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: chrome-data
+          path: ${{ env.CHROME_PROFILE_PATH }}
+        continue-on-error: true
+
+      - name: 🌐 Download & Unzip Chrome Profile from Release URL (jika artefak tidak ditemukan)
+        if: steps.download-artifact.outcome == 'failure'
         run: |
           $releaseUrl = "https://github.com/telokuh/selenium-github-actions/releases/download/new/User.Data.zip"
           $zipPath = "${{ env.CHROME_PROFILE_PATH }}\User.Data.zip"
           $extractPath = "${{ env.CHROME_PROFILE_PATH }}\"
           
-          Write-Host "Downloading Chrome profile from $releaseUrl..."
-          Invoke-WebRequest -Uri $releaseUrl -OutFile $zipPath
-          
-          if (Test-Path $zipPath) {
+          Write-Host "Tidak ada artefak yang ditemukan. Mengunduh profil dari GitHub Release..."
+          try {
+            Invoke-WebRequest -Uri $releaseUrl -OutFile $zipPath
             Write-Host "Download successful. Extracting files to $extractPath..."
             Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
             Write-Host "Extraction complete."
-          } else {
-            Write-Warning "Failed to download User.Data.zip. Starting with a fresh profile."
+          } catch {
+            Write-Warning "Gagal mengunduh atau mengekstrak profil dari rilis. Memulai dengan profil kosong."
           }
 
       - name: ⚙️ Install Tailscale (if missing) & show version
@@ -152,9 +160,8 @@ jobs:
           Stop-Process -Name "chrome" -ErrorAction SilentlyContinue
           
           $sourcePath = "${{ env.CHROME_PROFILE_PATH }}\"
-          $destPath = "C:\Users\${{ env.RDP_USER }}\AppData\Local\Google\Chrome\"
+          $destPath = "C:\Users\${{ env.RDP_USER }}\AppData\Local\Google\Chrome\User Data\"
           
-          # Simplified check for files to avoid multi-line YAML issues
           if ((Test-Path $sourcePath) -and ((Get-ChildItem -Path $sourcePath -Recurse -File | Measure-Object).Count -gt 0)) {
             Write-Host "Copying Chrome profile from temporary location to RDP user's AppData..."
             Copy-Item -Path "$sourcePath*" -Destination "$destPath" -Recurse -Force
@@ -182,7 +189,7 @@ jobs:
             }
           } catch { Write-Warning "Startup purge failed: $_" }
 
-      - name: 🔗 Tailscale up (hostname=bullet) + show IP/FQDN/DERP
+      - name: 🔗 Tailscale up (hostname=bullet)
         id: up
         run: |
           $ts = "C:\Program Files\Tailscale\tailscale.exe"
@@ -190,16 +197,34 @@ jobs:
           & $ts up --authkey "${{ steps.cfg.outputs.authkey }}" --hostname "${{ env.TS_HOSTNAME }}" --accept-routes --accept-dns=false
           Start-Sleep -Seconds 2
 
+      - name: ⏱️ Wait for Tailscale to be Online
+        run: |
+          $timeout = New-TimeSpan -Seconds 60
+          $sw = [System.Diagnostics.Stopwatch]::StartNew()
+          $ts = "C:\Program Files\Tailscale\tailscale.exe"
+          do {
+              $status = & $ts status --json | ConvertFrom-Json -ErrorAction SilentlyContinue
+              if ($status.Self.Online) {
+                  Write-Host "Tailscale is now online."
+                  break
+              }
+              Write-Host "Waiting for Tailscale to connect..."
+              Start-Sleep -Seconds 5
+          } while ($sw.Elapsed -lt $timeout)
+
+          if (-not $status.Self.Online) {
+              Write-Error "Timeout waiting for Tailscale to come online."
+              exit 1
+          }
+
           $ip4 = (& $ts ip -4 | Select-Object -First 1)
-          $status = & $ts status --json | ConvertFrom-Json
           $fqdn = $status.Self.DNSName
           $derp = $status.Self.DERP
           "ip4=$ip4" | Out-File -Append $env:GITHUB_OUTPUT
           "fqdn=$fqdn" | Out-File -Append $env:GITHUB_OUTPUT
           "derp=$derp" | Out-File -Append $env:GITHUB_OUTPUT
-
           "### RDP (A)`nHost: $env:TS_HOSTNAME`nIPv4: $ip4`nMagicDNS: $fqdn`nDERP: $derp`nUser: $env:RDP_USER`nPass: $env:RDP_PASS" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-
+          
       - name: ⏳ Keep alive
         run: |
           $mins=[int]"${{ steps.cfg.outputs.runtime }}"
@@ -210,24 +235,42 @@ jobs:
             Start-Sleep -Seconds 60
           }
       
-      - name: ⬆️ Copy Updated Profile from AppData to Artifact Location
+      - name: ⬆️ Salin Profil yang Diperbarui ke Direktori Artifact
         if: always()
         run: |
-          Write-Host "Stopping all Chrome processes before copying profile data."
+          Write-Host "Menghentikan semua proses Chrome sebelum menyalin data profil..."
           Stop-Process -Name "chrome" -ErrorAction SilentlyContinue
           
           $sourcePath = "C:\Users\${{ env.RDP_USER }}\AppData\Local\Google\Chrome\User Data\"
           $destPath = "${{ env.CHROME_PROFILE_PATH }}"
           
+          # Bersihkan direktori tujuan
+          Write-Host "Membersihkan direktori artefak sementara: $destPath"
+          if (Test-Path $destPath) {
+              Get-ChildItem -Path $destPath -Recurse | Remove-Item -Recurse -Force
+          }
+          
+          # Salin data dengan penanganan kesalahan
           if (Test-Path $sourcePath) {
-            Write-Host "Copying updated Chrome profile from AppData to temporary location..."
-            Copy-Item -Path "$sourcePath*" -Destination "$destPath" -Recurse -Force
-            Write-Host "Copy successful. Files copied: $((Get-ChildItem -Path $destPath -Recurse -File | Measure-Object).Count)"
+              Write-Host "Menyalin profil Chrome yang diperbarui dari AppData..."
+              $files = Get-ChildItem -Path $sourcePath -Recurse
+              $copiedCount = 0
+              $skippedCount = 0
+              foreach ($file in $files) {
+                  try {
+                      Copy-Item -Path $file.FullName -Destination (Join-Path -Path $destPath -ChildPath ($file.FullName.Substring($sourcePath.Length))) -Force -ErrorAction Stop
+                      $copiedCount++
+                  } catch {
+                      Write-Warning "Melewatkan file terkunci: $($file.FullName) - $($_)"
+                      $skippedCount++
+                  }
+              }
+              Write-Host "Penyalinan selesai. Total file disalin: $copiedCount, dilewati: $skippedCount."
           } else {
-            Write-Warning "Chrome profile not found. No data to save."
+              Write-Warning "Profil Chrome tidak ditemukan. Tidak ada data yang disimpan."
           }
 
-      - name: 📤 Upload Artifact
+      - name: 📤 Unggah Artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
