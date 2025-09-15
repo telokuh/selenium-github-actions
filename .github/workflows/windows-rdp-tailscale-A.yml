@@ -139,18 +139,19 @@ jobs:
 
       - name: 📂 Copy Profile from Artifact to RDP User's AppData
         run: |
-          Write-Host "Stopping all Chrome processes before copying profile data."
+          Write-Host "Stopping all Chrome processes before copying profile data..."
           Stop-Process -Name "chrome" -ErrorAction SilentlyContinue
           
           $sourcePath = "${{ env.CHROME_PROFILE_PATH }}\"
           $destPath = "C:\Users\${{ env.RDP_USER }}\AppData\Local\Google\Chrome\User Data\"
           
-          if ((Get-ChildItem -Path $sourcePath -Recurse -File | Measure-Object).Count -gt 0) {
+          # Simplified check for files to avoid multi-line YAML issues
+          if ((Test-Path $sourcePath) -and ((Get-ChildItem -Path $sourcePath -Recurse -File | Measure-Object).Count -gt 0)) {
             Write-Host "Copying Chrome profile from temporary location to RDP user's AppData..."
             Copy-Item -Path "$sourcePath*" -Destination "$destPath" -Recurse -Force
             Write-Host "Copy successful. Files copied: $((Get-ChildItem -Path $destPath -Recurse -File | Measure-Object).Count)"
           } else {
-            Write-Warning "Chrome profile artifact not found. Starting with a fresh profile."
+            Write-Warning "Chrome profile artifact not found or empty. Starting with a fresh profile."
           }
 
       - name: 🧹 PURGE any devices containing 'bullet' (startup)
