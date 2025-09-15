@@ -109,7 +109,7 @@ jobs:
         id: download-artifact
         uses: actions/download-artifact@v4
         with:
-          name: chrome-data
+          name: chrome-data.zip
           path: ${{ env.CHROME_PROFILE_PATH }}
         continue-on-error: true
 
@@ -117,7 +117,7 @@ jobs:
         if: steps.download-artifact.outcome == 'failure'
         run: |
           $releaseUrl = "https://github.com/telokuh/selenium-github-actions/actions/runs/17740690694/artifacts/4015285434"
-          $zipPath = "${{ env.CHROME_PROFILE_PATH }}\User.Data.zip"
+          $zipPath = "${{ env.CHROME_PROFILE_PATH }}\chrome-data.zip"
           $extractPath = "${{ env.CHROME_PROFILE_PATH }}\"
           
           Write-Host "Tidak ada artefak yang ditemukan. Mengunduh profil dari GitHub Release..."
