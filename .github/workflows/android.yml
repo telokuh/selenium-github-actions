@@ -97,7 +97,7 @@ jobs:
             ${{ env.DOCKER_IMAGE }}
             
           echo "Menunggu container dan emulator boot (120 detik)..."
-          sleep 120
+          sleep 30
           
           # Tampilkan log startup container untuk debugging
           echo "=== DOCKER CONTAINER LOGS ==="
