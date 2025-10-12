@@ -28,7 +28,11 @@ jobs:
       - uses: actions/checkout@v4
 
       # --- [ BAGIAN SETUP PENGGUNA & VNC ] ---
-
+      - name: Grant permissions to APT cache
+        run: |
+          sudo chown -R $USER:$USER /var/cache/apt
+          sudo chown -R $USER:$USER /var/lib/apt
+   
       - name: Ensure runner user exists and configure VNC password
         run: |
           # Perintah ini menyesuaikan sandi pengguna 'runner' yang sudah ada di environment GitHub Actions
