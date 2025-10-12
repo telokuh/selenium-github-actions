@@ -38,6 +38,8 @@ jobs:
       - name: Install XFCE, VNC Server, and noVNC/Websockify
         run: |
           echo ">>> Updating & Installing Base Components..."
+          echo "set man-db/auto-update false" | debconf-communicate
+          dpkg-reconfigure man-db
           sudo apt-get update -qq
           # Menghilangkan xfce4-goodies dan chromium-browser untuk kecepatan. Menambahkan git dan python3-websockify.
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
@@ -105,7 +107,8 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
-      
+
+
       - name: 📦 Cache Android SDK Components
         id: cache-sdk
         uses: actions/cache@v3
@@ -114,7 +117,8 @@ jobs:
             ${{ env.ANDROID_SDK_ROOT }}/platforms
             ${{ env.ANDROID_SDK_ROOT }}/system-images
             ${{ env.ANDROID_SDK_ROOT }}/platform-tools
-            ${{ env.ANDROID_SDK_ROOT }}/cmdline-tools/latest
+            # Tambahkan folder cmdline-tools untuk caching biner sdkmanager
+            ${{ env.ANDROID_SDK_ROOT }}/cmdline-tools
           key: ${{ runner.os }}-android-sdk-${{ env.ANDROID_API }}-${{ hashFiles('**/sdk-install-marker.txt') }}
           restore-keys: |
             ${{ runner.os }}-android-sdk-${{ env.ANDROID_API }}-
@@ -122,18 +126,19 @@ jobs:
       - name: 🔧 Install Android SDK Components
         if: steps.cache-sdk.outputs.cache-hit != 'true'
         run: |
-          # Gunakan ANDROID_SDK_ROOT yang ditentukan
+          # 1. Tetapkan ANDROID_HOME dan buat direktori
           export ANDROID_HOME=${{ env.ANDROID_SDK_ROOT }}
           mkdir -p $ANDROID_HOME
           
-          # Install command-line tools
+          # 2. Instal Command Line Tools terlebih dahulu
+          # Ini adalah biner sdkmanager, avdmanager, dll.
           echo "y" | sdkmanager "cmdline-tools;latest"
           
-          # Tambahkan path tools ke GITHUB_PATH agar dikenal
+          # 3. Tetapkan PATH agar SDK MANAGER ditemukan
+          # sdkmanager berada di subfolder 'bin' di dalam cmdline-tools
           echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH 
-          echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH 
           
-          # Install platform dan system-image
+          # 4. Instal platform dan system-image, sekarang sdkmanager sudah dikenal
           echo "y" | sdkmanager \
             "platform-tools" \
             "platforms;android-${{ env.ANDROID_API }}" \
@@ -145,16 +150,16 @@ jobs:
         run: |
           export ANDROID_HOME=${{ env.ANDROID_SDK_ROOT }}
           
-          # Pastikan path tools ada lagi (sering hilang setelah step)
+          # Pastikan path tools ada lagi untuk avdmanager dan emulator
           echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH 
+          echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH 
           echo "$ANDROID_HOME/emulator" >> $GITHUB_PATH 
           
-          # Membuat/menimpa AVD untuk memastikan keberadaannya
           echo "no" | avdmanager create avd -n ${{ env.AVD_NAME }} -k "system-images;android-${{ env.ANDROID_API }};google_apis;x86_64" --device "pixel" --force
           
-          # Verifikasi AVD telah dibuat
           avdmanager list avd
-
+      
+      # ... (lanjutan kode) ...
       - name: 📱 Start Android Emulator in Background
         run: |
           export ANDROID_HOME=${{ env.ANDROID_SDK_ROOT }}
