@@ -120,7 +120,7 @@ jobs:
       - name: 🔗 Tailscale up (hostname=bullet)
         id: up
         run: |
-          sudo tailscale logout
+          #sudo tailscale logout
           sudo tailscale up --authkey "${{ steps.cfg.outputs.authkey }}" --hostname "${{ env.TS_HOSTNAME }}" --accept-routes --accept-dns=false --force-reauth
           sleep 5
 
