@@ -22,52 +22,54 @@ env:
 jobs:
   setup-gui-runner:
     runs-on: ubuntu-latest
-    timeout-minutes: 370 # Beri waktu yang cukup panjang
+    timeout-minutes: 370
     
     steps:
       - uses: actions/checkout@v4
-# ... (lanjutan setelah uses: actions/checkout@v4) ...
 
+      # 1. Perbaiki Izin Cache APT/Debconf (Untuk mengatasi Permission Denied)
       - name: 🔧 Fix APT Cache Permissions
         run: |
-          # Perbaiki izin untuk cache APT dan Debconf
           sudo chown -R $USER:$USER /var/cache/apt
           sudo chown -R $USER:$USER /var/lib/apt
           sudo chown -R $USER:$USER /var/cache/debconf
           
-          # Hapus lock files yang mungkin macet
+          # Hapus lock files
           sudo rm -f /var/cache/apt/archives/lock
           sudo rm -f /var/lib/apt/lists/lock
           sudo rm -f /var/cache/debconf/config.dat
           sudo rm -f /var/cache/debconf/passwords.dat
 
+
       - name: Ensure runner user exists and configure VNC password
         run: |
-          # Perintah ini menyesuaikan sandi pengguna 'runner' yang sudah ada di environment GitHub Actions
           echo "${{ env.VNC_USER }}:${{ env.VNC_PASS }}" | sudo chpasswd
           echo "${{ env.VNC_USER }} ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/${{ env.VNC_USER }}
-   
+
+      # 2. Instalasi Paket (Memasukkan Konfigurasi man-db)
       - name: Install XFCE, VNC Server, and noVNC/Websockify
         run: |
-        
           echo ">>> Updating & Installing Base Components..."
-          echo "set man-db/auto-update false" | debconf-communicate
-          dpkg-reconfigure man-db
+          
+          # KONFIGURASI MAN-DB UNTUK KECEPATAN:
+          # Pastikan debconf berkomunikasi secara non-interaktif
+          echo "set man-db/auto-update false" | sudo DEBIAN_FRONTEND=noninteractive debconf-communicate || true
+          
           sudo apt-get update -qq
-          # Menghilangkan xfce4-goodies dan chromium-browser untuk kecepatan. Menambahkan git dan python3-websockify.
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
             xfce4 xorg dbus-x11 \
             tigervnc-standalone-server tigervnc-common \
             git python3-websockify jq
           
+          # Lakukan rekonfigurasi man-db setelah instalasi APT untuk menerapkan setelan
+          sudo DEBIAN_FRONTEND=noninteractive dpkg-reconfigure man-db || true
+          
           echo ">>> Configuring VNC..."
-          # Pastikan direktori VNC dibuat dan di-own oleh user runner (default)
           mkdir -p /home/${{ env.VNC_USER }}/.vnc
           echo ${{ env.VNC_PASS }} | vncpasswd -f > /home/${{ env.VNC_USER }}/.vnc/passwd
           chmod 600 /home/${{ env.VNC_USER }}/.vnc/passwd
           chown -R ${{ env.VNC_USER }}:${{ env.VNC_USER }} /home/${{ env.VNC_USER }}/.vnc
           
-          # Start XFCE when VNC launches
           echo "startxfce4" > /home/${{ env.VNC_USER }}/.xsession
           chown ${{ env.VNC_USER }}:${{ env.VNC_USER }} /home/${{ env.VNC_USER }}/.xsession
           
@@ -80,7 +82,6 @@ jobs:
       - name: ⚙️ Install Tailscale
         run: |
           curl -fsSL https://tailscale.com/install.sh | sudo sh
-          # Ubah kepemilikan direktori state agar dapat di-cache
           sudo chown -R ${{ env.VNC_USER }}:${{ env.VNC_USER }} /var/lib/tailscale
           
       - name: 📦 Cache Tailscale State
@@ -88,7 +89,6 @@ jobs:
         uses: actions/cache@v3
         with:
           path: /var/lib/tailscale
-          # Gunakan hostname sebagai key
           key: ${{ runner.os }}-tailscale-${{ runner.arch }}-${{ env.TS_HOSTNAME }}-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-tailscale-${{ runner.arch }}-${{ env.TS_HOSTNAME }}-
@@ -103,7 +103,6 @@ jobs:
               echo "Cache Tailscale ditemukan, terhubung kembali."
           fi
           
-          # Gunakan AUTH_PARAM yang optional, dan hostname yang wajib
           sudo tailscale up \
             ${AUTH_PARAM} \
             --hostname ${{ env.TS_HOSTNAME }} \
@@ -111,7 +110,7 @@ jobs:
             --accept-dns=false \
             --timeout=0
             
-          sleep 5 # Beri waktu agar koneksi Tailscale stabil
+          sleep 5
 
       # --- [ BAGIAN SETUP ANDROID EMULATOR ] ---
 
@@ -120,8 +119,7 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
-
-
+      
       - name: 📦 Cache Android SDK Components
         id: cache-sdk
         uses: actions/cache@v3
@@ -130,7 +128,6 @@ jobs:
             ${{ env.ANDROID_SDK_ROOT }}/platforms
             ${{ env.ANDROID_SDK_ROOT }}/system-images
             ${{ env.ANDROID_SDK_ROOT }}/platform-tools
-            # Tambahkan folder cmdline-tools untuk caching biner sdkmanager
             ${{ env.ANDROID_SDK_ROOT }}/cmdline-tools
           key: ${{ runner.os }}-android-sdk-${{ env.ANDROID_API }}-${{ hashFiles('**/sdk-install-marker.txt') }}
           restore-keys: |
@@ -139,19 +136,13 @@ jobs:
       - name: 🔧 Install Android SDK Components
         if: steps.cache-sdk.outputs.cache-hit != 'true'
         run: |
-          # 1. Tetapkan ANDROID_HOME dan buat direktori
           export ANDROID_HOME=${{ env.ANDROID_SDK_ROOT }}
           mkdir -p $ANDROID_HOME
           
-          # 2. Instal Command Line Tools terlebih dahulu
-          # Ini adalah biner sdkmanager, avdmanager, dll.
           echo "y" | sdkmanager "cmdline-tools;latest"
           
-          # 3. Tetapkan PATH agar SDK MANAGER ditemukan
-          # sdkmanager berada di subfolder 'bin' di dalam cmdline-tools
           echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH 
           
-          # 4. Instal platform dan system-image, sekarang sdkmanager sudah dikenal
           echo "y" | sdkmanager \
             "platform-tools" \
             "platforms;android-${{ env.ANDROID_API }}" \
@@ -163,7 +154,6 @@ jobs:
         run: |
           export ANDROID_HOME=${{ env.ANDROID_SDK_ROOT }}
           
-          # Pastikan path tools ada lagi untuk avdmanager dan emulator
           echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH 
           echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH 
           echo "$ANDROID_HOME/emulator" >> $GITHUB_PATH 
@@ -171,20 +161,17 @@ jobs:
           echo "no" | avdmanager create avd -n ${{ env.AVD_NAME }} -k "system-images;android-${{ env.ANDROID_API }};google_apis;x86_64" --device "pixel" --force
           
           avdmanager list avd
-      
-      # ... (lanjutan kode) ...
+
       - name: 📱 Start Android Emulator in Background
         run: |
           export ANDROID_HOME=${{ env.ANDROID_SDK_ROOT }}
           
           echo "Memulai Android Emulator..."
-          # Jalankan di bawah user VNC
           sudo -u ${{ env.VNC_USER }} nohup emulator -avd ${{ env.AVD_NAME }} -gpu swiftshader_indirect -no-audio -accel off &
           
           echo "Menunggu 120 detik agar emulator boot..."
           sleep 120 
           
-          # Cek status AVD
           adb devices
           
       # --- [ BAGIAN START LAYANAN & KEEP ALIVE ] ---
@@ -192,16 +179,12 @@ jobs:
       - name: Start VNC, noVNC proxy, and Show URL
         run: |
           echo ">>> Starting VNC server..."
-          # Jalankan VNC di user VNC_USER
           sudo -u ${{ env.VNC_USER }} vncserver :1 -geometry 1280x800 -depth 24
           
           echo ">>> Starting noVNC websockify..."
-          # Jalankan websockify di background
           nohup websockify --web=/opt/noVNC ${{ env.NOVNC_PORT }} localhost:${{ env.VNC_PORT }} &
 
-          # Dapatkan IP Tailscale
           TAILSCALE_IP=$(tailscale ip -4 | head -n1)
-          
           VNC_URL="http://${TAILSCALE_IP}:${{ env.NOVNC_PORT }}/vnc.html"
 
           echo "==========================================="
@@ -216,9 +199,7 @@ jobs:
           echo "==========================================="
           
           echo ">>> Keeping runner alive (Timeout 370 mins)..."
-          # Keep alive loop (600 detik = 10 menit)
           while true; do
-            # Cek adb secara periodik agar emulator tetap aktif
             adb devices
             sleep 600
           done
