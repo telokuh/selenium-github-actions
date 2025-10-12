@@ -1,4 +1,4 @@
-name: Setup XFCE Runner + Tailscale + noVNC
+name: Docker Android Emulator + noVNC via Tailscale
 
 on:
   workflow_dispatch:
@@ -6,70 +6,98 @@ on:
 permissions:
   contents: read
 
+env:
+  # Konfigurasi VNC/Pengguna (Digunakan untuk Tailscale Host)
+  VNC_USER: runner
+  VNC_PASS: runner
+  NOVNC_PORT: 6080
+  # Konfigurasi Tailscale
+  TS_HOSTNAME: gh-docker-android
+  # Nama image Docker yang akan digunakan (Ganti sesuai image Anda)
+  DOCKER_IMAGE: budtmo/docker-android-x86-8.1
+  
 jobs:
-  setup-gui-runner:
+  run-docker-emulator:
     runs-on: ubuntu-latest
-    env:
-      TAILSCALE_AUTHKEY: ${{ vars.AUTHKEY }}
-      USERNAME: runner
-      PASSWORD: runner
-      TAILSCALE_HOSTNAME: gh-xfce-novnc-${{ github.run_id }}
-
+    timeout-minutes: 370
+    
     steps:
       - uses: actions/checkout@v4
 
-      - name: Ensure runner user has sudo
+      # --- [ BAGIAN SETUP TAILSCALE PADA HOST RUNNER ] ---
+
+      - name: ⚙️ Install Tailscale on Host Runner
         run: |
-          echo "${USERNAME}:${PASSWORD}" | sudo chpasswd
-          echo "${USERNAME} ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/${USERNAME}
-
-      - name: Install XFCE + VNC server
-        run: |
-          echo ">>> Installing lightweight XFCE Desktop + VNC..."
-          sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq xfce4 xfce4-goodies xorg dbus-x11 tigervnc-standalone-server tigervnc-common
-
-          # Configure VNC password for the runner
-          mkdir -p /home/${USERNAME}/.vnc
-          echo ${PASSWORD} | vncpasswd -f > /home/${USERNAME}/.vnc/passwd
-          chmod 600 /home/${USERNAME}/.vnc/passwd
-          chown -R ${USERNAME}:${USERNAME} /home/${USERNAME}/.vnc
-
-          # Start XFCE when VNC launches
-          echo "startxfce4" > /home/${USERNAME}/.xsession
-          chown ${USERNAME}:${USERNAME} /home/${USERNAME}/.xsession
-
-      - name: Install noVNC + websockify
-        run: |
-          echo ">>> Installing noVNC..."
-          sudo apt-get install -y -qq git python3-websockify
-          git clone https://github.com/novnc/noVNC.git /opt/noVNC
-          ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
-
-      - name: Install Tailscale
-        run: |
-          echo ">>> Installing Tailscale..."
+          echo ">>> Installing Tailscale on Host..."
           curl -fsSL https://tailscale.com/install.sh | sudo sh
-          sudo tailscale up --authkey "${TAILSCALE_AUTHKEY}" --hostname "${TAILSCALE_HOSTNAME}"
-
-      - name: Start VNC + noVNC proxy + Show URL
+          
+      - name: 🔗 Tailscale up (Persistent)
         run: |
-          echo ">>> Starting VNC server..."
-          sudo -u ${USERNAME} vncserver :1 -geometry 1280x800 -depth 24
+          # Perangkat Tailscale harus didaftarkan di host runner
+          AUTH_PARAM="--authkey ${{ vars.AUTHKEY }}"
+          
+          # Gunakan sudo karena tailscale biasanya memerlukan izin root
+          sudo tailscale up \
+            ${AUTH_PARAM} \
+            --hostname ${{ env.TS_HOSTNAME }} \
+            --accept-routes \
+            --accept-dns=false \
+            --timeout=0
+            
+          sleep 5
 
-          echo ">>> Starting noVNC websockify..."
-          nohup websockify --web=/opt/noVNC 6080 localhost:5901 &
+      # --- [ BAGIAN MENJALANKAN DOCKER EMULATOR ] ---
 
-          # Get Tailscale IP
+      - name: 🐳 Run Docker Android Emulator
+        run: |
+          echo ">>> Pulling and Running Docker Emulator..."
+          # Gunakan 'docker run' dengan argumen yang dibutuhkan emulator
+          # --privileged diperlukan untuk virtualisasi (KVM/HAXM) di dalam container
+          # --network=host memungkinkan container menggunakan port host secara langsung (penting untuk Tailscale)
+          docker run \
+            --privileged \
+            --detach \
+            --network=host \
+            --name=android-emu \
+            ${{ env.DOCKER_IMAGE }} &
+
+          echo "Menunggu container dan emulator boot (120 detik)..."
+          sleep 40
+          
+          # Verifikasi container berjalan
+          docker ps -a
+          
+      # --- [ BAGIAN START LAYANAN & KEEP ALIVE ] ---
+
+      - name: Show Connection URL and Keep Alive
+        run: |
+          # Pastikan Tailscale online
+          timeout=60
+          for i in $(seq 1 $timeout); do
+              if /usr/bin/tailscale status --json | jq -e '.Self.Online' > /dev/null; then
+                  break
+              fi
+              echo "Waiting for Tailscale to connect... ($i/$timeout s)"
+              sleep 1
+          done
+          
           TAILSCALE_IP=$(tailscale ip -4 | head -n1)
+          VNC_URL="http://${TAILSCALE_IP}:${{ env.NOVNC_PORT }}/vnc.html"
 
-          echo "=== CONNECTION INFO ==="
-          echo "USERNAME: ${USERNAME}"
-          echo "PASSWORD: ${PASSWORD}"
-          echo "noVNC URL:"
-          echo "    http://${TAILSCALE_IP}:6080/vnc.html"
-          echo
-          echo ">>> Keeping runner alive..."
+          echo "==========================================="
+          echo "=== KONEKSI DOCKER EMULATOR VIA TAILSCALE ==="
+          echo "==========================================="
+          echo "URL NO VNC (Akses dari Browser Anda):"
+          echo "${VNC_URL}"
+          echo "==========================================="
+          
+          echo ">>> Keeping runner and container alive..."
+          # Loop keep alive. Cek status container secara periodik.
           while true; do
-            sleep 600
+            # Cek status container, jika berhenti, kita hentikan job
+            if ! docker ps | grep -q "android-emu"; then
+              echo "Docker container stopped unexpectedly."
+              exit 1
+            fi
+            sleep 300 # Tunggu 5 menit
           done
