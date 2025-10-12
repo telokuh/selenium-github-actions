@@ -93,7 +93,7 @@ jobs:
           echo 'Dpkg::Post-Invoke {"rm -f /var/cache/man/oldfiles >&2;"};' | sudo tee -a /etc/apt/apt.conf.d/99skip-man-db > /dev/null
           # Instal Xfce4 Desktop Environment, TigerVNC, dan browser
           # Mengganti 'firefox-esr' dengan 'chromium-browser'
-          sudo apt update
+          
           sudo DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y xfce4 xfce4-goodies tightvncserver chromium-browser xfonts-base
           sudo rm /etc/apt/apt.conf.d/99skip-man-db
 
@@ -163,22 +163,6 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: 🔧 Force Set ANDROID_HOME and SDK_ROOT
-        run: |
-          # actions/setup-java seharusnya mengatur ini. 
-          # Kami tambahkan ini untuk memastikan path tersedia untuk langkah cache selanjutnya.
-          # Lokasi default di runner Ubuntu: /usr/local/lib/android/sdk
-          if [ -z "$ANDROID_HOME" ]; then
-            echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> $GITHUB_ENV
-          fi
-      - name: ♻️ Restore Android SDK Cache
-        id: cache-sdk
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.ANDROID_HOME }}
-          key: ${{ runner.os }}-android-sdk-${{ env.ANDROID_API }}-${{ hashFiles('**/build.gradle', '**/pom.xml') }}
-          restore-keys: |
-            ${{ runner.os }}-android-sdk-${{ env.ANDROID_API }}-
 
       - name: 🔧 Install Android SDK Components
         if: steps.cache-sdk.outputs.cache-hit != 'true'
@@ -190,13 +174,6 @@ jobs:
           
           echo "no" | $SDK_ROOT/cmdline-tools/latest/bin/avdmanager create avd -n ${{ env.AVD_NAME }} -k "system-images;android-${{ env.ANDROID_API }};google_apis;x86_64" --device "pixel"
           
-      - name: 💾 Save Android SDK Cache
-        # ⬇️ Perbaikan Path: Kembali menggunakan actions/cache@v4 dan mengulang path
-        if: always() && steps.cache-sdk.outputs.cache-hit != 'true'
-        uses: actions/cache@v4 
-        with:
-          path: ${{ env.ANDROID_HOME }}
-          key: ${{ steps.cache-sdk.outputs.cache-primary-key }}
 
       - name: 📱 Start Android Emulator in Background
         run: |
