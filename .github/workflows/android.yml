@@ -1,193 +1,111 @@
-name: Linux VNC via Tailscale (Android)
+name: Android Emulator + noVNC via Tailscale
 
 on:
   workflow_dispatch:
 
-concurrency:
-  group: tailscale-rdp-singleton
-  cancel-in-progress: false
-
 permissions:
   contents: read
-  actions: read
-
-defaults:
-  run:
-    shell: bash
 
 env:
-  TS_HOSTNAME: bullet
-  VNC_PASS: Bullet@12345
+  # Konfigurasi VNC/Pengguna
+  VNC_USER: runner
+  VNC_PASS: runner
   VNC_PORT: 5901
+  NOVNC_PORT: 6080
+  # Konfigurasi Android
   ANDROID_API: 30
   AVD_NAME: MyAndroidDevice
-  # Variabel ini penting untuk memastikan sdkmanager dan avdmanager ditemukan
-  ANDROID_SDK_ROOT: ${{ github.workspace }}/android_sdk 
+  ANDROID_SDK_ROOT: ${{ github.workspace }}/android_sdk
+  # Konfigurasi Tailscale
+  TS_HOSTNAME: gh-android-novnc
   
 jobs:
-  rdp:
+  setup-gui-runner:
     runs-on: ubuntu-latest
-    timeout-minutes: 370
+    timeout-minutes: 370 # Beri waktu yang cukup panjang
     
     steps:
-      - name: 🔧 Resolve inputs (safe)
-        id: cfg
-        env:
-          RAW_TAILNET: ${{ vars.TAILNET }}
-          RAW_APIKEY: ${{ vars.APIKEY }}
-          RAW_AUTHKEY: ${{ vars.AUTHKEY }}
-          RAW_PAT: ${{ vars.GH_TOKEN }}
-          RAW_TEST: false
-          RAW_RUNTIME: 60
-          RAW_LOOPS: 0
+      - uses: actions/checkout@v4
+
+      # --- [ BAGIAN SETUP PENGGUNA & VNC ] ---
+
+      - name: Ensure runner user exists and configure VNC password
         run: |
-          toIntOr() {
-            if [[ "$1" =~ ^[0-9]+$ ]]; then echo "$1"; else echo "$2"; fi
-          }
+          # Perintah ini menyesuaikan sandi pengguna 'runner' yang sudah ada di environment GitHub Actions
+          echo "${{ env.VNC_USER }}:${{ env.VNC_PASS }}" | sudo chpasswd
+          echo "${{ env.VNC_USER }} ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/${{ env.VNC_USER }}
 
-          tailnet="${RAW_TAILNET}"
-          apiKey="${RAW_APIKEY}"
-          authKey="${RAW_AUTHKEY}"
-          pat="${RAW_PAT}"
-          
-          if [[ -z "$tailnet" || -z "$apiKey" || -z "$authKey" || -z "$pat" ]]; then
-            echo "Missing required inputs (TAILNET, APIKEY, AUTHKEY, GH_TOKEN variables must be set)."
-            exit 1
-          fi
-
-          isTest=$(echo "${RAW_TEST}" | grep -iqE 'true|1|yes|on' && echo "true" || echo "false")
-          runtime=$(toIntOr "${RAW_RUNTIME}" 355)
-          if [[ "$isTest" == "true" ]]; then runtime=5; fi
-          if [[ "$isTest" == "false" && "$runtime" -lt 6 ]]; then runtime=355; fi
-          if [[ "$runtime" -gt 360 ]]; then runtime=355; fi
-
-          loops=$(toIntOr "${RAW_LOOPS}" 0)
-          if [[ "$loops" -lt 0 ]]; then loops=0; fi
-
-          echo "tailnet=$tailnet" >> $GITHUB_OUTPUT
-          echo "apikey=$apiKey" >> $GITHUB_OUTPUT
-          echo "authkey=$authkey" >> $GITHUB_OUTPUT
-          echo "pat=$pat" >> $GITHUB_OUTPUT
-          echo "runtime=$runtime" >> $GITHUB_OUTPUT
-          echo "loops=$loops" >> $GITHUB_OUTPUT
-          echo "Resolved: test=$isTest, runtime=$runtime, loops=$loops"
-          
-      - name: Grant permissions to APT cache
+      - name: Install XFCE, VNC Server, and noVNC/Websockify
         run: |
-          sudo chown -R $USER:$USER /var/cache/apt
-          sudo chown -R $USER:$USER /var/lib/apt
+          echo ">>> Updating & Installing Base Components..."
+          sudo apt-get update -qq
+          # Menghilangkan xfce4-goodies dan chromium-browser untuk kecepatan. Menambahkan git dan python3-websockify.
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            xfce4 xorg dbus-x11 \
+            tigervnc-standalone-server tigervnc-common \
+            git python3-websockify jq
           
-      - name: Cache APT packages
-        uses: actions/cache@v3
-        with:
-          path: |
-            /var/cache/apt/archives
-            /var/lib/apt/lists
-          key: ${{ runner.os }}-apt-${{ runner.arch }}-${{ hashFiles('**/install-desktop.sh') }}
-          restore-keys: |
-            ${{ runner.os }}-apt-${{ runner.arch }}-
-
-      - name: 💻 Install Desktop Environment & VNC Server
-        run: |
-          echo 'set man-db/auto-update false' | sudo debconf-communicate >/dev/null
-          sudo dpkg-reconfigure man-db 
-          # Chromium dihapus
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y xfce4 xfce4-goodies tightvncserver xfonts-base jq
+          echo ">>> Configuring VNC..."
+          # Pastikan direktori VNC dibuat dan di-own oleh user runner (default)
+          mkdir -p /home/${{ env.VNC_USER }}/.vnc
+          echo ${{ env.VNC_PASS }} | vncpasswd -f > /home/${{ env.VNC_USER }}/.vnc/passwd
+          chmod 600 /home/${{ env.VNC_USER }}/.vnc/passwd
+          chown -R ${{ env.VNC_USER }}:${{ env.VNC_USER }} /home/${{ env.VNC_USER }}/.vnc
           
-          # Konfigurasi VNC Password
-          mkdir -p ~/.vnc
-          echo "${{ env.VNC_PASS }}" | vncpasswd -f > ~/.vnc/passwd
-          chmod 600 ~/.vnc/passwd
+          # Start XFCE when VNC launches
+          echo "startxfce4" > /home/${{ env.VNC_USER }}/.xsession
+          chown ${{ env.VNC_USER }}:${{ env.VNC_USER }} /home/${{ env.VNC_USER }}/.xsession
           
-          # Buat file startup VNC (xstartup)
-          echo '#!/bin/bash
-          xrdb $HOME/.Xresources
-          startxfce4 &' > ~/.vnc/xstartup
-          chmod +x ~/.vnc/xstartup
+          echo ">>> Installing noVNC..."
+          git clone https://github.com/novnc/noVNC.git /opt/noVNC
+          ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
           
-          # Jalankan VNC Server di background
-          vncserver :1 -geometry 1280x800 -depth 24
-          echo "VNC Server dijalankan di port ${{ env.VNC_PORT }}"
+      # --- [ BAGIAN SETUP CACHE & TAILSCALE ] ---
 
       - name: ⚙️ Install Tailscale
         run: |
-          curl -fsSL https://tailscale.com/install.sh | sh
-          sudo chown -R $USER:$USER /var/lib/tailscale
+          curl -fsSL https://tailscale.com/install.sh | sudo sh
+          # Ubah kepemilikan direktori state agar dapat di-cache
+          sudo chown -R ${{ env.VNC_USER }}:${{ env.VNC_USER }} /var/lib/tailscale
           
       - name: 📦 Cache Tailscale State
         id: cache-ts
         uses: actions/cache@v3
         with:
           path: /var/lib/tailscale
+          # Gunakan hostname sebagai key
           key: ${{ runner.os }}-tailscale-${{ runner.arch }}-${{ env.TS_HOSTNAME }}-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-tailscale-${{ runner.arch }}-${{ env.TS_HOSTNAME }}-
-
-     
-
-      - name: 🔗 Tailscale up (Persistent)
-        id: up
-        run: |
-          # Parameter yang dibutuhkan untuk koneksi (selalu ada)
-          CONN_PARAMS="--accept-routes --accept-dns=false --timeout=0"
-          
-          # Parameter yang hanya dibutuhkan untuk pendaftaran (authkey dan hostname)
-          REGISTRATION_PARAMS=""
-
-          if [[ "${{ steps.cache-ts.outputs.cache-hit }}" != "true" ]]; then
-              echo "Cache Tailscale tidak ditemukan (Run pertama), menggunakan Authkey dan Hostname untuk pendaftaran."
-              # Gabungkan authkey DAN hostname ke dalam REGISTRATION_PARAMS
-              REGISTRATION_PARAMS="--authkey ${{ steps.cfg.outputs.authkey }} --hostname ${{ env.TS_HOSTNAME }}"
-          else
-              echo "Cache Tailscale ditemukan (Perangkat sudah terdaftar), terhubung kembali dengan kunci yang ada."
-              # Pada run berikutnya, kita hanya perlu memastikan hostname sudah disetel
-              CONN_PARAMS="${CONN_PARAMS} --hostname ${{ env.TS_HOSTNAME }}"
-          fi
-          
-          # Jalankan tailscale up dengan semua parameter yang diperlukan
-          sudo tailscale up ${REGISTRATION_PARAMS} ${CONN_PARAMS}
             
-          sleep 5
-      
-      
-      
-      
-      - name: ⏱️ Wait for Tailscale to be Online
-        id: wait_ts
+      - name: 🔗 Tailscale up (Persistent)
         run: |
-          timeout=60
-          ts_path="/usr/bin/tailscale"
-          
-          for i in $(seq 1 $timeout); do
-              # Periksa status
-              status_json=$($ts_path status --json 2>/dev/null)
-              if echo "$status_json" | grep -q '"Self":{"Online":true'; then
-                  echo "Tailscale is now online."
-                  break
-              fi
-              echo "Waiting for Tailscale to connect... ($i/$timeout s)"
-              sleep 1
-          done
-
-          if ! echo "$status_json" | grep -q '"Online": true'; then
-              echo "Timeout waiting for Tailscale to come online."
-              exit 1
+          AUTH_PARAM=""
+          if [[ "${{ steps.cache-ts.outputs.cache-hit }}" != "true" ]]; then
+              echo "Cache Tailscale tidak ditemukan, menggunakan Authkey untuk pendaftaran."
+              AUTH_PARAM="--authkey ${{ vars.AUTHKEY }}"
+          else
+              echo "Cache Tailscale ditemukan, terhubung kembali."
           fi
           
-          ip4=$($ts_path ip -4 | head -n 1)
-          fqdn=$(echo "$status_json" | jq -r '.Self.DNSName')
-          
-          echo "ip4=$ip4" >> $GITHUB_OUTPUT
-          echo "fqdn=$fqdn" >> $GITHUB_OUTPUT
-          echo "VNC Address: ${ip4}:${{ env.VNC_PORT }}"
+          # Gunakan AUTH_PARAM yang optional, dan hostname yang wajib
+          sudo tailscale up \
+            ${AUTH_PARAM} \
+            --hostname ${{ env.TS_HOSTNAME }} \
+            --accept-routes \
+            --accept-dns=false \
+            --timeout=0
+            
+          sleep 5 # Beri waktu agar koneksi Tailscale stabil
 
-      # Menggunakan variabel ANDROID_SDK_ROOT untuk lokasi SDK yang persisten
+      # --- [ BAGIAN SETUP ANDROID EMULATOR ] ---
+
       - name: 🤖 Setup Java (Required for SDK)
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
-
+      
       - name: 📦 Cache Android SDK Components
         id: cache-sdk
         uses: actions/cache@v3
@@ -196,8 +114,7 @@ jobs:
             ${{ env.ANDROID_SDK_ROOT }}/platforms
             ${{ env.ANDROID_SDK_ROOT }}/system-images
             ${{ env.ANDROID_SDK_ROOT }}/platform-tools
-            ${{ env.ANDROID_SDK_ROOT }}/cmdline-tools
-          # Tambahkan ANDROID_API ke key agar cache berubah jika API berubah
+            ${{ env.ANDROID_SDK_ROOT }}/cmdline-tools/latest
           key: ${{ runner.os }}-android-sdk-${{ env.ANDROID_API }}-${{ hashFiles('**/sdk-install-marker.txt') }}
           restore-keys: |
             ${{ runner.os }}-android-sdk-${{ env.ANDROID_API }}-
@@ -205,68 +122,85 @@ jobs:
       - name: 🔧 Install Android SDK Components
         if: steps.cache-sdk.outputs.cache-hit != 'true'
         run: |
-          # Instalasi SDK ke direktori yang kita kontrol
-          mkdir -p ${{ env.ANDROID_SDK_ROOT }}
-          echo "y" | sdkmanager --install "platform-tools" "platforms;android-${{ env.ANDROID_API }}" "system-images;android-${{ env.ANDROID_API }};google_apis;x86_64"
+          # Gunakan ANDROID_SDK_ROOT yang ditentukan
+          export ANDROID_HOME=${{ env.ANDROID_SDK_ROOT }}
+          mkdir -p $ANDROID_HOME
           
-          touch sdk-install-marker.txt # File penanda agar cache tahu kapan harus diperbarui
+          # Install command-line tools
+          echo "y" | sdkmanager "cmdline-tools;latest"
+          
+          # Tambahkan path tools ke GITHUB_PATH agar dikenal
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH 
+          echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH 
+          
+          # Install platform dan system-image
+          echo "y" | sdkmanager \
+            "platform-tools" \
+            "platforms;android-${{ env.ANDROID_API }}" \
+            "system-images;android-${{ env.ANDROID_API }};google_apis;x86_64"
+          
+          touch sdk-install-marker.txt
 
-      # Langka baru: Memastikan AVD dibuat di setiap run (tidak kena cache)
-      - name: 🏗️ Create AVD
+      - name: 🏗️ Create AVD (Always Run)
         run: |
-          # Perlu menambahkan path ke tools agar sdkmanager/avdmanager dikenal
-          echo "${{ env.ANDROID_SDK_ROOT }}/platform-tools" >> $GITHUB_PATH 
-          echo "${{ env.ANDROID_SDK_ROOT }}/emulator" >> $GITHUB_PATH 
+          export ANDROID_HOME=${{ env.ANDROID_SDK_ROOT }}
           
-          # Membuat AVD. Gunakan --force untuk menimpa jika sudah ada,
-          # ini penting untuk memastikan AVD ada dan valid di setiap run.
+          # Pastikan path tools ada lagi (sering hilang setelah step)
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH 
+          echo "$ANDROID_HOME/emulator" >> $GITHUB_PATH 
+          
+          # Membuat/menimpa AVD untuk memastikan keberadaannya
           echo "no" | avdmanager create avd -n ${{ env.AVD_NAME }} -k "system-images;android-${{ env.ANDROID_API }};google_apis;x86_64" --device "pixel" --force
           
-          # Cek AVD yang tersedia (untuk debug)
+          # Verifikasi AVD telah dibuat
           avdmanager list avd
 
       - name: 📱 Start Android Emulator in Background
         run: |
-          # Path emulator seharusnya sudah ada di GITHUB_PATH dari langkah sebelumnya
+          export ANDROID_HOME=${{ env.ANDROID_SDK_ROOT }}
+          
           echo "Memulai Android Emulator..."
-          # Argumen '-no-window' dihilangkan
-          nohup emulator -avd ${{ env.AVD_NAME }} -gpu swiftshader_indirect -no-audio -accel off &
+          # Jalankan di bawah user VNC
+          sudo -u ${{ env.VNC_USER }} nohup emulator -avd ${{ env.AVD_NAME }} -gpu swiftshader_indirect -no-audio -accel off &
           
           echo "Menunggu 120 detik agar emulator boot..."
-          sleep 20 
+          sleep 120 
           
           # Cek status AVD
           adb devices
           
-      - name: ⏳ Keep alive
-        run: |
-          mins=${{ steps.cfg.outputs.runtime }}
-          start_time=$(date +%s)
-          end_time=$((start_time + mins * 60))
+      # --- [ BAGIAN START LAYANAN & KEEP ALIVE ] ---
 
-          while [ $(date +%s) -lt $end_time ]; do
-            current_time=$(date +%s)
-            left_seconds=$((end_time - current_time))
-            left_minutes=$((left_seconds / 60))
-            echo "VNC alive... ($left_minutes min left)"
-            
+      - name: Start VNC, noVNC proxy, and Show URL
+        run: |
+          echo ">>> Starting VNC server..."
+          # Jalankan VNC di user VNC_USER
+          sudo -u ${{ env.VNC_USER }} vncserver :1 -geometry 1280x800 -depth 24
+          
+          echo ">>> Starting noVNC websockify..."
+          # Jalankan websockify di background
+          nohup websockify --web=/opt/noVNC ${{ env.NOVNC_PORT }} localhost:${{ env.VNC_PORT }} &
+
+          # Dapatkan IP Tailscale
+          TAILSCALE_IP=$(tailscale ip -4 | head -n1)
+          
+          VNC_URL="http://${TAILSCALE_IP}:${{ env.NOVNC_PORT }}/vnc.html"
+
+          echo "==========================================="
+          echo "=== KONEKSI VNC VIA NO VNC / TAILSCALE ==="
+          echo "==========================================="
+          echo "USERNAME: ${{ env.VNC_USER }}"
+          echo "PASSWORD: ${{ env.VNC_PASS }}"
+          echo "IP TAILSCALE: ${TAILSCALE_IP}"
+          echo "-------------------------------------------"
+          echo "URL NO VNC (Akses dari Browser Anda):"
+          echo "${VNC_URL}"
+          echo "==========================================="
+          
+          echo ">>> Keeping runner alive (Timeout 370 mins)..."
+          # Keep alive loop (600 detik = 10 menit)
+          while true; do
+            # Cek adb secara periodik agar emulator tetap aktif
             adb devices
-            
-            sleep 60
+            sleep 600
           done
-
-      - name: 🛑 Stop VNC Server and Emulator
-        if: always()
-        run: |
-          echo "Menghentikan VNC Server..."
-          vncserver -kill :1 || true
-          
-          echo "Menghentikan Emulator..."
-          adb emu kill || true
-          
-      - name: Clean up apt cache
-        run: |
-          sudo rm -f /var/cache/apt/archives/lock
-          sudo rm -f /var/lib/apt/lists/lock
-          sudo rm -rf /var/cache/apt/archives/partial
-          sudo rm -rf /var/lib/apt/lists/partial
