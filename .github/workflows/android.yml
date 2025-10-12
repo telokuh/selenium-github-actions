@@ -133,9 +133,9 @@ jobs:
       - name: 🚀 Manual noVNC/Websockify Startup
         run: |
           echo ">>> Container is running. Starting websockify manually..."
-          docker exec -d android-emu websockify ${{ env.NOVNC_PORT }} localhost:5901
+          #docker exec -d android-emu websockify ${{ env.NOVNC_PORT }} localhost:5901
           
-          echo "Websockify started on port ${{ env.NOVNC_PORT }}."
+          #echo "Websockify started on port ${{ env.NOVNC_PORT }}."
           sleep 5
 
       # 7. TAMPILKAN URL DAN JAGA TETAP HIDUP
@@ -161,5 +161,5 @@ jobs:
             # Panggil adb tanpa jalur SDK eksplisit (Perbaikan adb path)
             docker exec android-emu adb shell echo "Container is alive." || true
             
-            sleep 300 
+            sleep 3
           done
