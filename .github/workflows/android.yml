@@ -186,12 +186,12 @@ jobs:
           echo "no" | $SDK_ROOT/cmdline-tools/latest/bin/avdmanager create avd -n ${{ env.AVD_NAME }} -k "system-images;android-${{ env.ANDROID_API }};google_apis;x86_64" --device "pixel"
           
       - name: 💾 Save Android SDK Cache
+        # ⬇️ Perbaikan Path: Kembali menggunakan actions/cache@v4 dan mengulang path
         if: always() && steps.cache-sdk.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4 
+        uses: actions/cache@v4 
         with:
           path: ${{ env.ANDROID_HOME }}
           key: ${{ steps.cache-sdk.outputs.cache-primary-key }}
-          
 
       - name: 📱 Start Android Emulator in Background
         run: |
