@@ -14,7 +14,7 @@ env:
   # Konfigurasi Tailscale
   TS_HOSTNAME: gh-docker-android
   # Nama image Docker yang akan digunakan (Ganti sesuai image Anda)
-  DOCKER_IMAGE: budtmo/docker-android-x86-8.1
+  DOCKER_IMAGE: runthat/emulator-android:latest-api-30
   
 jobs:
   run-docker-emulator:
