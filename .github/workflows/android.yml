@@ -1,0 +1,279 @@
+name: Windows RDP via Tailscale (A)
+# Perhatian: Nama ini mungkin perlu diganti menjadi 'Linux VNC via Tailscale'
+
+on:
+  workflow_dispatch:
+    inputs:
+      ts_tailnet:
+        description: "Tailscale tailnet (e.g. you@gmail.com)"
+        required: true
+      ts_api_key:
+        description: "Tailscale API key (device admin, no 'Bearer')"
+        required: true
+      ts_authkey:
+        description: "Tailscale auth key (reusable or ephemeral)"
+        required: true
+      gh_api_token:
+        description: "GitHub Personal Access Token (classic; scopes: repo, workflow)"
+        required: true
+      test_mode:
+        description: "Run 5-minute test loop"
+        type: boolean
+        default: false
+      runtime_minutes:
+        description: "Runtime in minutes (max 360; capped to 355)"
+        required: false
+        default: "355"
+      loops:
+        description: "How many handoffs (0 = infinite)"
+        required: false
+        default: "0"
+
+concurrency:
+  group: tailscale-rdp-singleton
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+defaults:
+  run:
+    shell: bash # Ganti dari pwsh ke bash
+
+env:
+  TS_HOSTNAME: bullet
+  # Ganti VNC (VNC lebih umum untuk remote desktop Linux)
+  VNC_PASS: Bullet@12345
+  VNC_PORT: 5901
+  # Lokasi-lokasi untuk Linux
+  TMP_CHROME_PATH: /tmp/chrome-profile
+  ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+  AVD_NAME: MyAndroidDevice
+
+jobs:
+  rdp:
+    runs-on: ubuntu-latest # Ganti dari windows-2022 ke ubuntu-latest
+    timeout-minutes: 370
+    
+    # Tambahkan KVM untuk akselerasi emulator (PENTING)
+    # Ini memerlukan VM bersarang di runner yang mendukung KVM. Ubuntu biasanya mendukung ini.
+    # Namun, KVM tidak tersedia di shared runner GitHub Actions. Kita akan pakai emulation/software rendering.
+    
+    steps:
+      - name: 🔧 Resolve inputs (safe)
+        id: cfg
+        # Hapus 'defaults: run: shell: pwsh' karena sudah global, 
+        # dan ubah sintaks PowerShell ke Bash
+        env:
+          RAW_TAILNET: ${{ inputs.ts_tailnet }}
+          RAW_APIKEY: ${{ inputs.ts_api_key }}
+          RAW_AUTHKEY: ${{ inputs.ts_authkey }}
+          RAW_PAT: ${{ inputs.gh_api_token }}
+          RAW_TEST: ${{ inputs.test_mode == true && 'true' || 'false' }}
+          RAW_RUNTIME: ${{ inputs.runtime_minutes || '355' }}
+          RAW_LOOPS: ${{ inputs.loops || '0' }}
+        run: |
+          toIntOr() {
+            if [[ "$1" =~ ^[0-9]+$ ]]; then echo "$1"; else echo "$2"; fi
+          }
+
+          tailnet="${RAW_TAILNET}"
+          apiKey="${RAW_APIKEY}"
+          authKey="${RAW_AUTHKEY}"
+          pat="${RAW_PAT}"
+          
+          if [[ -z "$tailnet" || -z "$apiKey" || -z "$authKey" || -z "$pat" ]]; then
+            echo "Missing required inputs"
+            exit 1
+          fi
+
+          # Robust boolean
+          isTest=$(echo "${RAW_TEST}" | grep -iqE 'true|1|yes|on' && echo "true" || echo "false")
+
+          runtime=$(toIntOr "${RAW_RUNTIME}" 355)
+          if [[ "$isTest" == "true" ]]; then runtime=5; fi
+
+          # Ensure ~6h (355) when test_mode is off and value is too small
+          if [[ "$isTest" == "false" && "$runtime" -lt 6 ]]; then runtime=355; fi
+          if [[ "$runtime" -gt 360 ]]; then runtime=355; fi
+
+          loops=$(toIntOr "${RAW_LOOPS}" 0)
+          if [[ "$loops" -lt 0 ]]; then loops=0; fi
+
+          echo "tailnet=$tailnet" >> $GITHUB_OUTPUT
+          echo "apikey=$apiKey" >> $GITHUB_OUTPUT
+          echo "authkey=$authkey" >> $GITHUB_OUTPUT
+          echo "pat=$pat" >> $GITHUB_OUTPUT
+          echo "runtime=$runtime" >> $GITHUB_OUTPUT
+          echo "loops=$loops" >> $GITHUB_OUTPUT
+          echo "Resolved: test=$isTest, runtime=$runtime, loops=$loops"
+
+      - name: 💻 Install Desktop Environment & VNC Server
+        run: |
+          # Instal Xfce4 Desktop Environment, TigerVNC, dan browser
+          sudo apt update
+          sudo apt install -y xfce4 xfce4-goodies tightvncserver firefox-esr
+          
+          # Konfigurasi VNC Password (Anda harus terhubung dengan password ini)
+          mkdir -p ~/.vnc
+          echo "${{ env.VNC_PASS }}" | vncpasswd -f > ~/.vnc/passwd
+          chmod 600 ~/.vnc/passwd
+          
+          # Buat file startup VNC (xstartup)
+          echo '#!/bin/bash
+          xrdb $HOME/.Xresources
+          startxfce4 &' > ~/.vnc/xstartup
+          chmod +x ~/.vnc/xstartup
+          
+          # Jalankan VNC Server di background
+          vncserver :1 -geometry 1280x800 -depth 24
+          echo "VNC Server dijalankan di port ${{ env.VNC_PORT }}"
+
+      - name: ⚙️ Install Tailscale
+        run: |
+          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.noarch.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
+          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list
+          sudo apt update
+          sudo apt install -y tailscale
+
+      - name: 🔗 Tailscale up (hostname=bullet)
+        id: up
+        run: |
+          sudo tailscale logout
+          # Gunakan sudo untuk menjalankan tailscale up di runner Linux
+          sudo tailscale up --authkey "${{ steps.cfg.outputs.authkey }}" --hostname "${{ env.TS_HOSTNAME }}" --accept-routes --accept-dns=false --force-reauth
+          sleep 5 # Tunggu sebentar
+          
+      - name: ⏱️ Wait for Tailscale to be Online
+        id: wait_ts
+        run: |
+          timeout=60
+          ts_path="/usr/bin/tailscale"
+          
+          for i in $(seq 1 $timeout); do
+              status_json=$($ts_path status --json 2>/dev/null)
+              if echo "$status_json" | grep -q '"Online": true'; then
+                  echo "Tailscale is now online."
+                  break
+              fi
+              echo "Waiting for Tailscale to connect... ($i/$timeout s)"
+              sleep 1
+          done
+
+          if ! echo "$status_json" | grep -q '"Online": true'; then
+              echo "Timeout waiting for Tailscale to come online."
+              exit 1
+          fi
+          
+          ip4=$($ts_path ip -4 | head -n 1)
+          fqdn=$(echo "$status_json" | jq -r '.Self.DNSName')
+          derp=$(echo "$status_json" | jq -r '.Self.DERP')
+          
+          echo "ip4=$ip4" >> $GITHUB_OUTPUT
+          echo "fqdn=$fqdn" >> $GITHUB_OUTPUT
+          echo "derp=$derp" >> $GITHUB_OUTPUT
+          
+          # Ringkasan VNC
+          echo "### VNC (Linux)`nHost: $TS_HOSTNAME`nIPv4: $ip4`nMagicDNS: $fqdn`nDERP: $derp`nRemote Desktop: VNC (port ${{ env.VNC_PORT }})`nUser/Pass: (Gunakan VNC Client)`nPassword VNC: ${{ env.VNC_PASS }}`n" | tee -a $GITHUB_STEP_SUMMARY
+
+# --- Langkah-Langkah Android Emulator Baru Dimulai ---
+
+      - name: 🤖 Setup Android SDK and Emulator
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      
+      - name: 🔧 Install Android SDK Components
+        run: |
+          # Gunakan alat yang sudah terinstal di runner Ubuntu GitHub
+          SDK_ROOT=$ANDROID_HOME
+          # Menambahkan Platform-Tools ke PATH (penting untuk adb)
+          echo "$SDK_ROOT/platform-tools" >> $GITHUB_PATH
+          
+          # Instal system image dan platform
+          # Note: Pilih x86/x86_64, ini lebih cepat di lingkungan virtual.
+          # Kita pakai Android 30 (API 30)
+          echo "y" | $SDK_ROOT/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-30" "system-images;android-30;google_apis;x86_64"
+          
+          # Buat AVD (Emulator)
+          echo "no" | $SDK_ROOT/cmdline-tools/latest/bin/avdmanager create avd -n ${{ env.AVD_NAME }} -k "system-images;android-30;google_apis;x86_64" --device "pixel"
+          
+          # Catatan: Akselerasi KVM tidak tersedia di shared runner, jadi performanya akan sangat lambat.
+
+      - name: 📱 Start Android Emulator in Background
+        # Jalankan di background (gunakan 'nohup')
+        run: |
+          # Tentukan lokasi emulator
+          EMULATOR=$ANDROID_HOME/emulator/emulator
+          
+          echo "Memulai Android Emulator..."
+          # Gunakan -no-window karena kita punya VNC Desktop GUI
+          # Gunakan -accel off untuk memastikan ia berjalan tanpa KVM
+          nohup $EMULATOR -avd ${{ env.AVD_NAME }} -gpu swiftshader_indirect -no-audio -no-window -accel off &
+          
+          # Tunggu 120 detik (2 menit) agar emulator boot. Mungkin perlu waktu lebih lama!
+          echo "Menunggu 120 detik agar emulator boot..."
+          sleep 120 
+          
+          # Cek status AVD
+          adb devices
+          
+# --- Akhir Langkah-Langkah Android Emulator Baru ---
+
+      - name: ⏳ Keep alive
+        run: |
+          # Menggunakan bash
+          mins=${{ steps.cfg.outputs.runtime }}
+          start_time=$(date +%s)
+          end_time=$((start_time + mins * 60))
+
+          while [ $(date +%s) -lt $end_time ]; do
+            current_time=$(date +%s)
+            left_seconds=$((end_time - current_time))
+            left_minutes=$((left_seconds / 60))
+            echo "VNC alive... ($left_minutes min left)"
+            sleep 60
+          done
+
+      - name: 🛑 Stop VNC Server and Emulator
+        if: always()
+        run: |
+          echo "Menghentikan VNC Server..."
+          vncserver -kill :1 || true
+          
+          echo "Menghentikan Emulator..."
+          # Gunakan adb untuk mematikan emulator
+          adb emu kill || true
+
+      # Menghapus semua langkah Chrome Profile & Artifact (Opsional: Hapus jika tidak perlu)
+      # Saya telah menghapus langkah-langkah Chrome Profile dan Artifact karena ini adalah lingkungan Linux/Android baru. 
+      # Jika Anda masih ingin menyimpan data Chrome di Linux, Anda harus menginstal Chrome dan menyesuaikan path.
+
+      - name: 🧹 PURGE any devices containing 'bullet' (exit)
+        if: always()
+        # Mengubah sintaks PowerShell RestMethod ke Bash Curl/Jq
+        run: |
+          API_KEY="${{ steps.cfg.outputs.apikey }}"
+          TAILNET="${{ steps.cfg.outputs.tailnet }}"
+          HOSTNAME="${{ env.TS_HOSTNAME }}"
+          API_URL="https://api.tailscale.com/api/v2/tailnet/$TAILNET/devices"
+          
+          RESPONSE=$(curl -s -H "Authorization: Bearer $API_KEY" "$API_URL")
+          
+          if [ $? -ne 0 ]; then
+            echo "Exit purge failed: Curl error"
+            exit 0
+          fi
+          
+          # Menggunakan jq untuk memfilter dan menghapus
+          echo "$RESPONSE" | jq -c '.devices[] | select(.name|test("(?i)bullet"))' | while read -r device; do
+            DEVICE_ID=$(echo "$device" | jq -r '.id')
+            DEVICE_NAME=$(echo "$device" | jq -r '.name')
+            
+            if [ -n "$DEVICE_ID" ]; then
+              curl -s -X DELETE -H "Authorization: Bearer $API_KEY" "https://api.tailscale.com/api/v2/device/$DEVICE_ID" > /dev/null
+              echo "Deleted at exit: $DEVICE_NAME"
+            fi
+          done
