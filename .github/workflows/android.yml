@@ -89,11 +89,14 @@ jobs:
             ${{ runner.os }}-apt-${{ runner.arch }}-
       - name: 💻 Install Desktop Environment & VNC Server (Chromium)
         run: |
+          echo 'Dpkg::Post-Invoke {"echo Skipping man-db update. >&2;"};' | sudo tee /etc/apt/apt.conf.d/99skip-man-db > /dev/null
+          echo 'Dpkg::Post-Invoke {"rm -f /var/cache/man/oldfiles >&2;"};' | sudo tee -a /etc/apt/apt.conf.d/99skip-man-db > /dev/null
           # Instal Xfce4 Desktop Environment, TigerVNC, dan browser
           # Mengganti 'firefox-esr' dengan 'chromium-browser'
           sudo apt update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y xfce4 xfce4-goodies tightvncserver chromium-browser
-          
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y xfce4 xfce4-goodies tightvncserver chromium-browser xfonts-base
+          sudo rm /etc/apt/apt.conf.d/99skip-man-db
+
           # Konfigurasi VNC Password (Anda harus terhubung dengan password ini)
           mkdir -p ~/.vnc
           echo "${{ env.VNC_PASS }}" | vncpasswd -f > ~/.vnc/passwd
