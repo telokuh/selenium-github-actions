@@ -157,6 +157,80 @@ jobs:
           echo "derp=$derp" >> $GITHUB_OUTPUT
           
 
+      - name: 🤖 Setup Android SDK and Emulator
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: 🔧 Force Set ANDROID_HOME and SDK_ROOT
+        run: |
+          # actions/setup-java seharusnya mengatur ini. 
+          # Kami tambahkan ini untuk memastikan path tersedia untuk langkah cache selanjutnya.
+          # Lokasi default di runner Ubuntu: /usr/local/lib/android/sdk
+          if [ -z "$ANDROID_HOME" ]; then
+            echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> $GITHUB_ENV
+          fi
+      - name: ♻️ Restore Android SDK Cache
+        id: cache-sdk
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.ANDROID_HOME }}
+          key: ${{ runner.os }}-android-sdk-${{ env.ANDROID_API }}-${{ hashFiles('**/build.gradle', '**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-android-sdk-${{ env.ANDROID_API }}-
+
+      - name: 🔧 Install Android SDK Components
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        run: |
+          SDK_ROOT=$ANDROID_HOME
+          echo "$SDK_ROOT/platform-tools" >> $GITHUB_PATH
+          
+          echo "y" | $SDK_ROOT/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-${{ env.ANDROID_API }}" "system-images;android-${{ env.ANDROID_API }};google_apis;x86_64"
+          
+          echo "no" | $SDK_ROOT/cmdline-tools/latest/bin/avdmanager create avd -n ${{ env.AVD_NAME }} -k "system-images;android-${{ env.ANDROID_API }};google_apis;x86_64" --device "pixel"
+          
+      - name: 💾 Save Android SDK Cache
+        # ⬇️ Perbaikan Path: Kembali menggunakan actions/cache@v4 dan mengulang path
+        if: always() && steps.cache-sdk.outputs.cache-hit != 'true'
+        uses: actions/cache@v4 
+        with:
+          path: ${{ env.ANDROID_HOME }}
+          key: ${{ steps.cache-sdk.outputs.cache-primary-key }}
+
+      - name: 📱 Start Android Emulator in Background
+        run: |
+          EMULATOR=$ANDROID_HOME/emulator/emulator
+          
+          echo "Memulai Android Emulator..."
+          nohup $EMULATOR -avd ${{ env.AVD_NAME }} -gpu swiftshader_indirect -no-audio -no-window -accel off &
+          
+          echo "Menunggu 120 detik agar emulator boot..."
+          sleep 120 
+          
+          # Cek status AVD
+          adb devices
+          
+
+      - name: ⏳ Keep alive
+        run: |
+          mins=${{ steps.cfg.outputs.runtime }}
+          start_time=$(date +%s)
+          end_time=$((start_time + mins * 60))
+
+          while [ $(date +%s) -lt $end_time ]; do
+            current_time=$(date +%s)
+            left_seconds=$((end_time - current_time))
+            left_minutes=$((left_seconds / 60))
+            echo "VNC alive... ($left_minutes min left)"
+            
+            # Cek status adb secara periodik agar emulator tetap "hidup"
+            adb devices
+            
+            sleep 60
+          done
+
+
       - name: 🛑 Stop VNC Server and Emulator
         if: always()
         run: |
@@ -166,32 +240,7 @@ jobs:
           echo "Menghentikan Emulator..."
           adb emu kill || true
 
-      - name: 🧹 PURGE any devices containing 'bullet' (exit)
-        if: always()
-        run: |
-          API_KEY="${{ steps.cfg.outputs.apikey }}"
-          TAILNET="${{ steps.cfg.outputs.tailnet }}"
-          HOSTNAME="${{ env.TS_HOSTNAME }}"
-          API_URL="https://api.tailscale.com/api/v2/tailnet/$TAILNET/devices"
-          
-          sudo apt install -y jq
 
-          RESPONSE=$(curl -s -H "Authorization: Bearer $API_KEY" "$API_URL")
-          
-          if [ $? -ne 0 ]; then
-            echo "Exit purge failed: Curl error"
-            exit 0
-          fi
-          
-          echo "$RESPONSE" | jq -c '.devices[] | select(.hostname|test("(?i)bullet"))' | while read -r device; do
-            DEVICE_ID=$(echo "$device" | jq -r '.id')
-            DEVICE_NAME=$(echo "$device" | jq -r '.hostname')
-            
-            if [ -n "$DEVICE_ID" ]; then
-              curl -s -X DELETE -H "Authorization: Bearer $API_KEY" "https://api.tailscale.com/api/v2/device/$DEVICE_ID" > /dev/null
-              echo "Deleted at exit: $DEVICE_NAME"
-            fi
-          done
           
       - name: Clean up apt cache
         run: |
