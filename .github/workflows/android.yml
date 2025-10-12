@@ -1,4 +1,4 @@
-name: Docker KVM Android 13 Emulator via Tailscale
+name: Docker KVM Android 13 Emulator via Tailscale (Final)
 
 on:
   workflow_dispatch:
@@ -14,6 +14,7 @@ env:
   TS_HOSTNAME: gh-kvm-android
   # Konfigurasi Docker
   DOCKER_IMAGE: budtmo/docker-android:emulator_13.0
+  EMULATOR_BOOT_TIME: 30 # Waktu tunggu boot Emulator
   
 jobs:
   run-docker-emulator:
@@ -23,25 +24,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      # 1. CACHING DOCKER: Menyimpan image dan layer yang diunduh
+      # 1. CACHING DOCKER
       - name: 📦 Cache Docker Layers
         id: cache-docker
         uses: actions/cache@v3
         with:
           path: /var/lib/docker
-          # Key menggunakan nama image untuk memastikan cache yang benar
           key: ${{ runner.os }}-docker-${{ hashFiles('run-docker-image-key') }} 
           restore-keys: |
             ${{ runner.os }}-docker-
             
-      # Jika cache tidak ditemukan, unduh image untuk pertama kali
       - name: Pull Docker Image (if not cached)
         if: steps.cache-docker.outputs.cache-hit != 'true'
         run: |
           echo "Docker cache not hit. Pulling image..."
           docker pull ${{ env.DOCKER_IMAGE }}
-          # Buat file dummy untuk menandai bahwa image dasar telah di-pull,
-          # ini membantu caching di run berikutnya.
           touch run-docker-image-key
 
       # 2. AKTIVASI KVM DI HOST RUNNER
@@ -54,22 +51,44 @@ jobs:
           sudo usermod -aG kvm $USER
           
       # 3. SETUP TAILSCALE PADA HOST RUNNER
-      - name: 🔗 Setup Tailscale on Host Runner
+      - name: 🔗 Install Tailscale
         run: |
           echo ">>> Installing Tailscale on Host..."
           curl -fsSL https://tailscale.com/install.sh | sudo sh
+          # Ubah kepemilikan agar cache dapat disimpan
+          sudo chown -R $USER:$USER /var/lib/tailscale
           
+      # 4. CACHING TAILSCALE STATE (BARU DITAMBAHKAN)
+      - name: 📦 Cache Tailscale State
+        id: cache-ts
+        uses: actions/cache@v3
+        with:
+          path: /var/lib/tailscale
+          # Key menggunakan hostname agar spesifik untuk perangkat ini
+          key: ${{ runner.os }}-tailscale-${{ runner.arch }}-${{ env.TS_HOSTNAME }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-tailscale-${{ runner.arch }}-${{ env.TS_HOSTNAME }}-
+            
       - name: 🔗 Tailscale up (Persistent)
         run: |
           AUTH_KEY="${{ vars.AUTHKEY }}"
-          if [ -z "$AUTH_KEY" ]; then
-            echo "Error: vars.AUTHKEY is empty. Please set the Tailscale Auth Key in Repository Variables."
-            exit 1
+          
+          # Tentukan apakah menggunakan Authkey atau menyambung kembali
+          AUTH_PARAM=""
+          if [[ "${{ steps.cache-ts.outputs.cache-hit }}" != "true" ]]; then
+              echo "Cache Tailscale tidak ditemukan, menggunakan Authkey untuk pendaftaran."
+              if [ -z "$AUTH_KEY" ]; then
+                echo "Error: vars.AUTHKEY is empty. Please set the Tailscale Auth Key in Repository Variables."
+                exit 1
+              fi
+              AUTH_PARAM="--authkey $AUTH_KEY"
+          else
+              echo "Cache Tailscale ditemukan, terhubung kembali."
           fi
           
           echo ">>> Connecting Tailscale..."
           sudo tailscale up \
-            --authkey "$AUTH_KEY" \
+            $AUTH_PARAM \
             --hostname ${{ env.TS_HOSTNAME }} \
             --accept-routes \
             --accept-dns=false \
@@ -77,14 +96,14 @@ jobs:
             
           sleep 5
 
-      # 4. MENJALANKAN DOCKER EMULATOR
+      # 5. MENJALANKAN DOCKER EMULATOR
       - name: 🐳 Run Docker Android Emulator
         id: run-docker
         run: |
           echo ">>> Running Docker Emulator..."
           
           if [ ! -e /dev/kvm ]; then
-            echo "WARNING: /dev/kvm not found despite setup. Emulator might fail or run slow."
+            echo "WARNING: /dev/kvm not found. Emulator might fail or run slow."
           fi
           
           # Perintah 'docker run' dengan KVM dan network host
@@ -96,21 +115,30 @@ jobs:
             --device=/dev/kvm \
             ${{ env.DOCKER_IMAGE }}
             
-          echo "Menunggu container dan emulator boot (120 detik)..."
-          sleep 30
+          echo "Menunggu container dan emulator boot (${{ env.EMULATOR_BOOT_TIME }} detik)..."
+          sleep ${{ env.EMULATOR_BOOT_TIME }}
           
           # Tampilkan log startup container untuk debugging
           echo "=== DOCKER CONTAINER LOGS ==="
           docker logs android-emu
           echo "============================="
           
-          # Periksa apakah container masih berjalan
+          # Pemeriksaan apakah container masih berjalan
           if ! docker ps | grep -q "android-emu"; then
-            echo "Error: Docker container stopped unexpectedly after startup. Check the logs above for the cause (likely KVM failure or Emulator crash)."
+            echo "Error: Docker container stopped unexpectedly after startup."
             exit 1
           fi
 
-      # 5. TAMPILKAN URL DAN JAGA TETAP HIDUP
+      # 6. MENJALANKAN WEBSOCKIFY SECARA MANUAL
+      - name: 🚀 Manual noVNC/Websockify Startup
+        run: |
+          echo ">>> Container is running. Starting websockify manually..."
+          docker exec -d android-emu websockify ${{ env.NOVNC_PORT }} localhost:5901
+          
+          echo "Websockify started on port ${{ env.NOVNC_PORT }}."
+          sleep 5
+
+      # 7. TAMPILKAN URL DAN JAGA TETAP HIDUP
       - name: Show Connection URL and Keep Alive
         run: |
           TAILSCALE_IP=$(tailscale ip -4 | head -n1)
@@ -124,15 +152,13 @@ jobs:
           echo "==========================================="
           
           echo ">>> Keeping runner and container alive (Timeout 370 mins)..."
-          # Loop keep alive:
-          # Menggunakan 'adb shell' tanpa jalur SDK eksplisit (perbaikan adb path)
           while true; do
             if ! docker ps | grep -q "android-emu"; then
               echo "Docker container stopped. Ending job."
               exit 1
             fi
             
-            # Panggil adb tanpa jalur SDK eksplisit (mengandalkan PATH internal container)
+            # Panggil adb tanpa jalur SDK eksplisit (Perbaikan adb path)
             docker exec android-emu adb shell echo "Container is alive." || true
             
             sleep 300 
