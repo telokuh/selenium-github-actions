@@ -26,22 +26,26 @@ jobs:
     
     steps:
       - uses: actions/checkout@v4
+# ... (lanjutan setelah uses: actions/checkout@v4) ...
 
-      # --- [ BAGIAN SETUP PENGGUNA & VNC ] ---
-      - name: Grant permissions to APT cache
+      - name: 🔧 Fix APT Cache Permissions
         run: |
+          # Perbaiki izin untuk cache APT dan Debconf
           sudo chown -R $USER:$USER /var/cache/apt
           sudo chown -R $USER:$USER /var/lib/apt
-   
+          sudo chown -R $USER:$USER /var/cache/debconf
+          
+          # Hapus lock files yang mungkin macet
+          sudo rm -f /var/cache/apt/archives/lock
+          sudo rm -f /var/lib/apt/lists/lock
+          sudo rm -f /var/cache/debconf/config.dat
+          sudo rm -f /var/cache/debconf/passwords.dat
+
       - name: Ensure runner user exists and configure VNC password
         run: |
           # Perintah ini menyesuaikan sandi pengguna 'runner' yang sudah ada di environment GitHub Actions
           echo "${{ env.VNC_USER }}:${{ env.VNC_PASS }}" | sudo chpasswd
           echo "${{ env.VNC_USER }} ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/${{ env.VNC_USER }}
-      - name: Grant permissions to APT cache
-        run: |
-          sudo chown -R $USER:$USER /var/cache/apt
-          sudo chown -R $USER:$USER /var/lib/apt
    
       - name: Install XFCE, VNC Server, and noVNC/Websockify
         run: |
