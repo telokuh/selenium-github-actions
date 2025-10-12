@@ -73,6 +73,7 @@ jobs:
           echo "runtime=$runtime" >> $GITHUB_OUTPUT
           echo "loops=$loops" >> $GITHUB_OUTPUT
           echo "Resolved: test=$isTest, runtime=$runtime, loops=$loops"
+          
       - name: Grant permissions to APT cache
         run: |
           sudo chown -R $USER:$USER /var/cache/apt
@@ -87,14 +88,15 @@ jobs:
           key: ${{ runner.os }}-apt-${{ runner.arch }}-${{ hashFiles('**/install-desktop.sh') }}
           restore-keys: |
             ${{ runner.os }}-apt-${{ runner.arch }}-
-      - name: 💻 Install Desktop Environment & VNC Server (Chromium)
+
+      - name: 💻 Install Desktop Environment & VNC Server
         run: |
           echo 'set man-db/auto-update false' | sudo debconf-communicate >/dev/null
           sudo dpkg-reconfigure man-db 
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y xfce4 xfce4-goodies tightvncserver chromium-browser xfonts-base
+          # Instalasi Chromium dihapus untuk kecepatan
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y xfce4 xfce4-goodies tightvncserver xfonts-base
           
-
-          # Konfigurasi VNC Password (Anda harus terhubung dengan password ini)
+          # Konfigurasi VNC Password
           mkdir -p ~/.vnc
           echo "${{ env.VNC_PASS }}" | vncpasswd -f > ~/.vnc/passwd
           chmod 600 ~/.vnc/passwd
@@ -113,11 +115,9 @@ jobs:
         run: |
           curl -fsSL https://tailscale.com/install.sh | sh
           
-
       - name: 🔗 Tailscale up (hostname=bullet)
         id: up
         run: |
-          #sudo tailscale logout
           sudo tailscale up --authkey "${{ steps.cfg.outputs.authkey }}" --hostname "${{ env.TS_HOSTNAME }}" --accept-routes --accept-dns=false --force-reauth
           sleep 5
 
@@ -153,14 +153,26 @@ jobs:
           echo "fqdn=$fqdn" >> $GITHUB_OUTPUT
           echo "derp=$derp" >> $GITHUB_OUTPUT
           
-
       - name: 🤖 Setup Android SDK and Emulator
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-
+      # Langkah baru: Cache Android SDK
+      - name: 📦 Cache Android SDK Components
+        id: cache-sdk
+        uses: actions/cache@v3
+        with:
+          path: |
+            ${{ env.ANDROID_HOME }}/platforms
+            ${{ env.ANDROID_HOME }}/system-images
+            ${{ env.ANDROID_HOME }}/platform-tools
+            ${{ env.ANDROID_HOME }}/cmdline-tools
+          key: ${{ runner.os }}-android-sdk-${{ env.ANDROID_API }}-${{ hashFiles('**/sdk-install-marker.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-android-sdk-${{ env.ANDROID_API }}-
+          
       - name: 🔧 Install Android SDK Components
         if: steps.cache-sdk.outputs.cache-hit != 'true'
         run: |
@@ -170,14 +182,16 @@ jobs:
           echo "y" | $SDK_ROOT/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-${{ env.ANDROID_API }}" "system-images;android-${{ env.ANDROID_API }};google_apis;x86_64"
           
           echo "no" | $SDK_ROOT/cmdline-tools/latest/bin/avdmanager create avd -n ${{ env.AVD_NAME }} -k "system-images;android-${{ env.ANDROID_API }};google_apis;x86_64" --device "pixel"
-          
+          # Tambahkan file penanda agar cache bekerja
+          touch sdk-install-marker.txt
 
       - name: 📱 Start Android Emulator in Background
         run: |
           EMULATOR=$ANDROID_HOME/emulator/emulator
           
           echo "Memulai Android Emulator..."
-          nohup $EMULATOR -avd ${{ env.AVD_NAME }} -gpu swiftshader_indirect -no-audio -no-window -accel off &
+          # Argumen '-no-window' dihilangkan agar jendela emulator muncul di VNC
+          nohup $EMULATOR -avd ${{ env.AVD_NAME }} -gpu swiftshader_indirect -no-audio -accel off &
           
           echo "Menunggu 120 detik agar emulator boot..."
           sleep 120 
@@ -185,7 +199,6 @@ jobs:
           # Cek status AVD
           adb devices
           
-
       - name: ⏳ Keep alive
         run: |
           mins=${{ steps.cfg.outputs.runtime }}
@@ -204,7 +217,6 @@ jobs:
             sleep 60
           done
 
-
       - name: 🛑 Stop VNC Server and Emulator
         if: always()
         run: |
@@ -213,8 +225,6 @@ jobs:
           
           echo "Menghentikan Emulator..."
           adb emu kill || true
-
-
           
       - name: Clean up apt cache
         run: |
