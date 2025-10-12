@@ -1,4 +1,4 @@
-name: Android Emulator + noVNC via Tailscale
+name: Setup XFCE Runner + Tailscale + noVNC
 
 on:
   workflow_dispatch:
@@ -6,207 +6,70 @@ on:
 permissions:
   contents: read
 
-env:
-  # Konfigurasi VNC/Pengguna
-  VNC_USER: runner
-  VNC_PASS: runner
-  VNC_PORT: 5901
-  NOVNC_PORT: 6080
-  # Konfigurasi Android (MENGGUNAKAN JALUR MANUAL KEMBALI)
-  ANDROID_API: 30
-  AVD_NAME: MyAndroidDevice
-  ANDROID_SDK_ROOT: ${{ github.workspace }}/android_sdk
-  # Konfigurasi Tailscale
-  TS_HOSTNAME: gh-android-novnc
-  
 jobs:
   setup-gui-runner:
     runs-on: ubuntu-latest
-    timeout-minutes: 370
-    
+    env:
+      TAILSCALE_AUTHKEY: ${{ vars.AUTHKEY }}
+      USERNAME: runner
+      PASSWORD: runner
+      TAILSCALE_HOSTNAME: gh-xfce-novnc-${{ github.run_id }}
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: 🔧 Fix APT Cache Permissions
+      - name: Ensure runner user has sudo
         run: |
-          # Perbaikan izin
-          sudo chown -R $USER:$USER /var/cache/apt
-          sudo chown -R $USER:$USER /var/lib/apt
-          sudo chown -R $USER:$USER /var/cache/debconf
-          echo "set man-db/auto-update false" | sudo DEBIAN_FRONTEND=noninteractive debconf-communicate || true
-          sudo rm -f /var/cache/apt/archives/lock
-          sudo rm -f /var/lib/apt/lists/lock
-          sudo rm -f /var/cache/debconf/config.dat
-          sudo rm -f /var/cache/debconf/passwords.dat
+          echo "${USERNAME}:${PASSWORD}" | sudo chpasswd
+          echo "${USERNAME} ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/${USERNAME}
 
-      - name: Ensure runner user exists and configure VNC password
+      - name: Install XFCE + VNC server
         run: |
-          echo "${{ env.VNC_USER }}:${{ env.VNC_PASS }}" | sudo chpasswd
-          echo "${{ env.VNC_USER }} ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/${{ env.VNC_USER }}
-
-      - name: Install XFCE, VNC Server, and noVNC/Websockify
-        run: |
-          echo ">>> Updating & Installing Base Components..."
-          
-          echo "set man-db/auto-update false" | sudo DEBIAN_FRONTEND=noninteractive debconf-communicate || true
-          
+          echo ">>> Installing lightweight XFCE Desktop + VNC..."
           sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-            xfce4 xorg dbus-x11 \
-            tigervnc-standalone-server tigervnc-common \
-            git python3-websockify jq
-          
-          sudo DEBIAN_FRONTEND=noninteractive dpkg-reconfigure man-db || true
-          
-          echo ">>> Configuring VNC..."
-          mkdir -p /home/${{ env.VNC_USER }}/.vnc
-          echo ${{ env.VNC_PASS }} | vncpasswd -f > /home/${{ env.VNC_USER }}/.vnc/passwd
-          chmod 600 /home/${{ env.VNC_USER }}/.vnc/passwd
-          chown -R ${{ env.VNC_USER }}:${{ env.VNC_USER }} /home/${{ env.VNC_USER }}/.vnc
-          
-          echo "startxfce4" > /home/${{ env.VNC_USER }}/.xsession
-          chown ${{ env.VNC_USER }}:${{ env.VNC_USER }} /home/${{ env.VNC_USER }}/.xsession
-          
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq xfce4 xfce4-goodies xorg dbus-x11 tigervnc-standalone-server tigervnc-common
+
+          # Configure VNC password for the runner
+          mkdir -p /home/${USERNAME}/.vnc
+          echo ${PASSWORD} | vncpasswd -f > /home/${USERNAME}/.vnc/passwd
+          chmod 600 /home/${USERNAME}/.vnc/passwd
+          chown -R ${USERNAME}:${USERNAME} /home/${USERNAME}/.vnc
+
+          # Start XFCE when VNC launches
+          echo "startxfce4" > /home/${USERNAME}/.xsession
+          chown ${USERNAME}:${USERNAME} /home/${USERNAME}/.xsession
+
+      - name: Install noVNC + websockify
+        run: |
           echo ">>> Installing noVNC..."
+          sudo apt-get install -y -qq git python3-websockify
           git clone https://github.com/novnc/noVNC.git /opt/noVNC
           ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
-          
-      # --- [ BAGIAN SETUP CACHE & TAILSCALE ] ---
 
-      - name: ⚙️ Install Tailscale
+      - name: Install Tailscale
         run: |
+          echo ">>> Installing Tailscale..."
           curl -fsSL https://tailscale.com/install.sh | sudo sh
-          sudo chown -R ${{ env.VNC_USER }}:${{ env.VNC_USER }} /var/lib/tailscale
-          
-      - name: 📦 Cache Tailscale State
-        id: cache-ts
-        uses: actions/cache@v3
-        with:
-          path: /var/lib/tailscale
-          key: ${{ runner.os }}-tailscale-${{ runner.arch }}-${{ env.TS_HOSTNAME }}-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-tailscale-${{ runner.arch }}-${{ env.TS_HOSTNAME }}-
-            
-      - name: 🔗 Tailscale up (Persistent)
-        run: |
-          AUTH_PARAM=""
-          if [[ "${{ steps.cache-ts.outputs.cache-hit }}" != "true" ]]; then
-              echo "Cache Tailscale tidak ditemukan, menggunakan Authkey untuk pendaftaran."
-              AUTH_PARAM="--authkey ${{ secrets.TAILSCALE_AUTHKEY }}"
-          else
-              echo "Cache Tailscale ditemukan, terhubung kembali."
-          fi
-          
-          sudo tailscale up \
-            ${AUTH_PARAM} \
-            --hostname ${{ env.TS_HOSTNAME }} \
-            --accept-routes \
-            --accept-dns=false \
-            --timeout=0
-            
-          sleep 5
+          sudo tailscale up --authkey "${TAILSCALE_AUTHKEY}" --hostname "${TAILSCALE_HOSTNAME}"
 
-      # --- [ BAGIAN SETUP ANDROID EMULATOR (MANUAL) ] ---
-
-      - name: 🤖 Setup Java (Required for SDK)
-        # Langkah ini hanya untuk Java, yang lebih stabil daripada SDK
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-      
-      - name: 📦 Cache Android SDK Components
-        id: cache-sdk
-        uses: actions/cache@v3
-        with:
-          path: |
-            ${{ env.ANDROID_SDK_ROOT }}
-          # Kita mencache seluruh direktori SDK ROOT
-          key: ${{ runner.os }}-android-sdk-${{ env.ANDROID_API }}-${{ hashFiles('**/sdk-install-marker.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-android-sdk-${{ env.ANDROID_API }}-
-          
-      - name: 🔧 Install/Restore Android SDK Components
-        run: |
-          export ANDROID_HOME=${{ env.ANDROID_SDK_ROOT }}
-          mkdir -p $ANDROID_HOME
-          
-          if [[ "${{ steps.cache-sdk.outputs.cache-hit }}" != "true" ]]; then
-              echo "Cache SDK tidak ditemukan. Menginstal Command Line Tools..."
-              # Unduh dan ekstrak Command Line Tools secara manual (SDK Manager biner)
-              SDK_TOOLS_URL="https://dl.google.com/android/repository/commandlinetools-linux-8098552_latest.zip"
-              wget -q $SDK_TOOLS_URL -O cmdline-tools.zip
-              unzip -q cmdline-tools.zip -d $ANDROID_HOME/cmdline-tools-temp
-              
-              # Pindahkan isinya ke 'latest' sesuai struktur baru
-              mkdir -p $ANDROID_HOME/cmdline-tools/latest
-              mv $ANDROID_HOME/cmdline-tools-temp/cmdline-tools/* $ANDROID_HOME/cmdline-tools/latest/
-              rm -rf $ANDROID_HOME/cmdline-tools-temp
-              
-              # TAMBAHKAN PATH biner SDK Manager yang baru diinstal
-              echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH 
-              
-              echo "Menginstal platform dan system-image..."
-              # Gunakan sdkmanager yang baru ditemukan
-              echo "y" | sdkmanager \
-                "platform-tools" \
-                "platforms;android-${{ env.ANDROID_API }}" \
-                "emulator" \
-                "system-images;android-${{ env.ANDROID_API }};google_apis;x86_64"
-              
-              touch sdk-install-marker.txt
-          else
-              echo "Cache SDK ditemukan. Memulihkan PATH..."
-              # Jika cache ditemukan, kita hanya perlu mengatur PATH
-              echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH 
-              echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH 
-              echo "$ANDROID_HOME/emulator" >> $GITHUB_PATH 
-          fi
-
-
-      - name: 🏗️ Create AVD (Always Run)
-        run: |
-          # AVD Manager sekarang harus ada di PATH
-          echo "no" | avdmanager create avd -n ${{ env.AVD_NAME }} -k "system-images;android-${{ env.ANDROID_API }};google_apis;x86_64" --device "pixel" --force
-          avdmanager list avd
-
-      - name: 📱 Start Android Emulator in Background
-        run: |
-          echo "Memulai Android Emulator..."
-          # Jalankan di bawah user VNC
-          sudo -u ${{ env.VNC_USER }} nohup emulator -avd ${{ env.AVD_NAME }} -gpu swiftshader_indirect -no-audio -accel off &
-          
-          echo "Menunggu 120 detik agar emulator boot..."
-          sleep 30 
-          
-          adb devices
-          
-      # --- [ BAGIAN START LAYANAN & KEEP ALIVE ] ---
-
-      - name: Start VNC, noVNC proxy, and Show URL
+      - name: Start VNC + noVNC proxy + Show URL
         run: |
           echo ">>> Starting VNC server..."
-          sudo -u ${{ env.VNC_USER }} vncserver :1 -geometry 1280x800 -depth 24
-          
+          sudo -u ${USERNAME} vncserver :1 -geometry 1280x800 -depth 24
+
           echo ">>> Starting noVNC websockify..."
-          nohup websockify --web=/opt/noVNC ${{ env.NOVNC_PORT }} localhost:${{ env.VNC_PORT }} &
+          nohup websockify --web=/opt/noVNC 6080 localhost:5901 &
 
+          # Get Tailscale IP
           TAILSCALE_IP=$(tailscale ip -4 | head -n1)
-          VNC_URL="http://${TAILSCALE_IP}:${{ env.NOVNC_PORT }}/vnc.html"
 
-          echo "==========================================="
-          echo "=== KONEKSI VNC VIA NO VNC / TAILSCALE ==="
-          echo "==========================================="
-          echo "USERNAME: ${{ env.VNC_USER }}"
-          echo "PASSWORD: ${{ env.VNC_PASS }}"
-          echo "IP TAILSCALE: ${TAILSCALE_IP}"
-          echo "-------------------------------------------"
-          echo "URL NO VNC (Akses dari Browser Anda):"
-          echo "${VNC_URL}"
-          echo "==========================================="
-          
-          echo ">>> Keeping runner alive (Timeout 370 mins)..."
+          echo "=== CONNECTION INFO ==="
+          echo "USERNAME: ${USERNAME}"
+          echo "PASSWORD: ${PASSWORD}"
+          echo "noVNC URL:"
+          echo "    http://${TAILSCALE_IP}:6080/vnc.html"
+          echo
+          echo ">>> Keeping runner alive..."
           while true; do
-            adb devices
             sleep 600
           done
