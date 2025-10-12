@@ -2,15 +2,6 @@ name: Linux VNC via Tailscale (Android)
 
 on:
   workflow_dispatch:
-    inputs:
-      runtime_minutes:
-        description: "Runtime in minutes (max 360; capped to 355)"
-        required: false
-        default: "355"
-      loops:
-        description: "How many handoffs (0 = infinite)"
-        required: false
-        default: "0"
 
 concurrency:
   group: tailscale-rdp-singleton
@@ -45,8 +36,8 @@ jobs:
           RAW_AUTHKEY: ${{ vars.AUTHKEY }}
           RAW_PAT: ${{ vars.GH_TOKEN }}
           RAW_TEST: false
-          RAW_RUNTIME: ${{ inputs.runtime_minutes || '355' }}
-          RAW_LOOPS: ${{ inputs.loops || '0' }}
+          RAW_RUNTIME: 355
+          RAW_LOOPS: 0
         run: |
           toIntOr() {
             if [[ "$1" =~ ^[0-9]+$ ]]; then echo "$1"; else echo "$2"; fi
@@ -82,7 +73,20 @@ jobs:
           echo "runtime=$runtime" >> $GITHUB_OUTPUT
           echo "loops=$loops" >> $GITHUB_OUTPUT
           echo "Resolved: test=$isTest, runtime=$runtime, loops=$loops"
-
+      - name: Grant permissions to APT cache
+        run: |
+          sudo chown -R $USER:$USER /var/cache/apt
+          sudo chown -R $USER:$USER /var/lib/apt
+          
+      - name: Cache APT packages
+        uses: actions/cache@v3
+        with:
+          path: |
+            /var/cache/apt/archives
+            /var/lib/apt/lists
+          key: ${{ runner.os }}-apt-${{ runner.arch }}-${{ hashFiles('**/install-desktop.sh') }}
+          restore-keys: |
+            ${{ runner.os }}-apt-${{ runner.arch }}-
       - name: 💻 Install Desktop Environment & VNC Server (Chromium)
         run: |
           # Instal Xfce4 Desktop Environment, TigerVNC, dan browser
@@ -107,10 +111,8 @@ jobs:
 
       - name: ⚙️ Install Tailscale
         run: |
-          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.noarch.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
-          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list
-          sudo apt update
-          sudo apt install -y tailscale
+          curl -fsSL https://tailscale.com/install.sh | sh
+          
 
       - name: 🔗 Tailscale up (hostname=bullet)
         id: up
@@ -202,7 +204,12 @@ jobs:
           # Cek status AVD
           adb devices
           
----
+      - name: Clean up apt cache
+        run: |
+          sudo rm -f /var/cache/apt/archives/lock
+          sudo rm -f /var/lib/apt/lists/lock
+          sudo rm -rf /var/cache/apt/archives/partial
+          sudo rm -rf /var/lib/apt/lists/partial
 
       - name: ⏳ Keep alive
         run: |
