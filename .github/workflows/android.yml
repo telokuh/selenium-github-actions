@@ -1,4 +1,4 @@
-name: Docker Android Emulator + noVNC via Tailscale
+name: Docker KVM Android 13 Emulator via Tailscale
 
 on:
   workflow_dispatch:
@@ -7,38 +7,53 @@ permissions:
   contents: read
 
 env:
-  # Konfigurasi VNC/Pengguna (Digunakan untuk Tailscale Host)
+  # Konfigurasi Umum
   VNC_USER: runner
-  VNC_PASS: runner
   NOVNC_PORT: 6080
   # Konfigurasi Tailscale
-  TS_HOSTNAME: gh-docker-android
-  # Nama image Docker yang akan digunakan (Ganti sesuai image Anda)
+  TS_HOSTNAME: gh-kvm-android
+  # Konfigurasi Docker (Menggunakan image yang diminta)
   DOCKER_IMAGE: budtmo/docker-android:emulator_13.0
   
 jobs:
   run-docker-emulator:
-    runs-on: ubuntu-latest
+    # KVM hanya tersedia dan paling stabil di runner Linux
+    runs-on: ubuntu-latest 
     timeout-minutes: 370
     
     steps:
       - uses: actions/checkout@v4
 
-      # --- [ BAGIAN SETUP TAILSCALE PADA HOST RUNNER ] ---
-
-      - name: ⚙️ Install Tailscale on Host Runner
+      # 1. AKTIVASI KVM DI HOST RUNNER
+      - name: ⚙️ Enable KVM Hardware Acceleration
+        run: |
+          echo ">>> Enabling KVM permissions on host..."
+          # Mengatur perizinan 0666 untuk /dev/kvm
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          # Tambahkan user 'runner' ke grup 'kvm'
+          sudo usermod -aG kvm $USER
+          
+      # 2. SETUP TAILSCALE PADA HOST RUNNER
+      - name: 🔗 Setup Tailscale on Host Runner
         run: |
           echo ">>> Installing Tailscale on Host..."
           curl -fsSL https://tailscale.com/install.sh | sudo sh
           
       - name: 🔗 Tailscale up (Persistent)
         run: |
-          # Perangkat Tailscale harus didaftarkan di host runner
-          AUTH_PARAM="--authkey ${{ vars.AUTHKEY }}"
+          # Menggunakan vars.AUTHKEY seperti yang diminta
+          AUTH_KEY="${{ vars.AUTHKEY }}"
+          if [ -z "$AUTH_KEY" ]; then
+            echo "Error: vars.AUTHKEY is empty. Please set the Tailscale Auth Key in Repository Variables."
+            exit 1
+          fi
           
-          # Gunakan sudo karena tailscale biasanya memerlukan izin root
+          echo ">>> Connecting Tailscale..."
+          # --network=host tidak diperlukan di sini karena ini adalah host runner.
           sudo tailscale up \
-            ${AUTH_PARAM} \
+            --authkey "$AUTH_KEY" \
             --hostname ${{ env.TS_HOSTNAME }} \
             --accept-routes \
             --accept-dns=false \
@@ -46,58 +61,64 @@ jobs:
             
           sleep 5
 
-      # --- [ BAGIAN MENJALANKAN DOCKER EMULATOR ] ---
-
+      # 3. MENJALANKAN DOCKER EMULATOR
       - name: 🐳 Run Docker Android Emulator
+        id: run-docker
         run: |
           echo ">>> Pulling and Running Docker Emulator..."
-          # Gunakan 'docker run' dengan argumen yang dibutuhkan emulator
-          # --privileged diperlukan untuk virtualisasi (KVM/HAXM) di dalam container
-          # --network=host memungkinkan container menggunakan port host secara langsung (penting untuk Tailscale)
+          
+          # Cek keberadaan KVM device sebelum menjalankan
+          if [ ! -e /dev/kvm ]; then
+            echo "WARNING: /dev/kvm not found despite setup. Emulator might fail or run slow."
+          fi
+          
+          # Perintah 'docker run' dengan KVM dan network host:
+          # --privileged & --device=/dev/kvm: Memungkinkan akselerasi hardware
+          # --network=host: Penting agar Tailscale di host bisa mengakses port container (6080)
           docker run \
             --privileged \
             --detach \
             --network=host \
             --name=android-emu \
-            ${{ env.DOCKER_IMAGE }} &
-
+            --device=/dev/kvm \
+            ${{ env.DOCKER_IMAGE }}
+            
           echo "Menunggu container dan emulator boot (120 detik)..."
-          sleep 40
+          sleep 120
           
-          # Verifikasi container berjalan
-          docker ps -a
+          # Tampilkan log startup container untuk debugging
+          echo "=== DOCKER CONTAINER LOGS ==="
+          docker logs android-emu
+          echo "============================="
           
-      # --- [ BAGIAN START LAYANAN & KEEP ALIVE ] ---
+          # Periksa apakah container masih berjalan
+          if ! docker ps | grep -q "android-emu"; then
+            echo "Error: Docker container stopped unexpectedly after startup. Check the logs above for the cause (likely KVM failure or Emulator crash)."
+            exit 1
+          fi
 
+      # 4. TAMPILKAN URL DAN JAGA TETAP HIDUP
       - name: Show Connection URL and Keep Alive
         run: |
           # Pastikan Tailscale online
-          timeout=60
-          for i in $(seq 1 $timeout); do
-              if /usr/bin/tailscale status --json | jq -e '.Self.Online' > /dev/null; then
-                  break
-              fi
-              echo "Waiting for Tailscale to connect... ($i/$timeout s)"
-              sleep 1
-          done
-          
           TAILSCALE_IP=$(tailscale ip -4 | head -n1)
           VNC_URL="http://${TAILSCALE_IP}:${{ env.NOVNC_PORT }}/vnc.html"
 
           echo "==========================================="
-          echo "=== KONEKSI DOCKER EMULATOR VIA TAILSCALE ==="
+          echo "=== KONEKSI DOCKER KVM VIA TAILSCALE ==="
           echo "==========================================="
           echo "URL NO VNC (Akses dari Browser Anda):"
           echo "${VNC_URL}"
           echo "==========================================="
           
-          echo ">>> Keeping runner and container alive..."
-          # Loop keep alive. Cek status container secara periodik.
+          echo ">>> Keeping runner and container alive (Timeout 370 mins)..."
+          # Loop keep alive, memantau container
           while true; do
-            # Cek status container, jika berhenti, kita hentikan job
             if ! docker ps | grep -q "android-emu"; then
-              echo "Docker container stopped unexpectedly."
+              echo "Docker container stopped. Ending job."
               exit 1
             fi
-            sleep 300 # Tunggu 5 menit
+            # Kirim sinyal adb/ping setiap 5 menit (300 detik) untuk menjaga koneksi tetap hidup
+            docker exec android-emu /opt/android-sdk/platform-tools/adb shell echo "Container is alive." || true
+            sleep 300 
           done
