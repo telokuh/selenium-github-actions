@@ -12,10 +12,10 @@ env:
   VNC_PASS: runner
   VNC_PORT: 5901
   NOVNC_PORT: 6080
-  # Konfigurasi Android
+  # Konfigurasi Android (MENGGUNAKAN JALUR MANUAL KEMBALI)
   ANDROID_API: 30
   AVD_NAME: MyAndroidDevice
-  # ANDROID_HOME akan ditetapkan oleh action Google
+  ANDROID_SDK_ROOT: ${{ github.workspace }}/android_sdk
   # Konfigurasi Tailscale
   TS_HOSTNAME: gh-android-novnc
   
@@ -29,13 +29,11 @@ jobs:
 
       - name: 🔧 Fix APT Cache Permissions
         run: |
-          echo "set man-db/auto-update false" | sudo DEBIAN_FRONTEND=noninteractive debconf-communicate || true
-          # Perbaiki izin untuk APT dan Debconf cache
+          # Perbaikan izin
           sudo chown -R $USER:$USER /var/cache/apt
           sudo chown -R $USER:$USER /var/lib/apt
           sudo chown -R $USER:$USER /var/cache/debconf
-          
-          # Hapus lock files
+          echo "set man-db/auto-update false" | sudo DEBIAN_FRONTEND=noninteractive debconf-communicate || true
           sudo rm -f /var/cache/apt/archives/lock
           sudo rm -f /var/lib/apt/lists/lock
           sudo rm -f /var/cache/debconf/config.dat
@@ -108,22 +106,67 @@ jobs:
             
           sleep 5
 
-      # --- [ BAGIAN SETUP ANDROID EMULATOR (OFFICIAL) ] ---
+      # --- [ BAGIAN SETUP ANDROID EMULATOR (MANUAL) ] ---
 
-      # Menggantikan semua langkah Java/SDK dengan action resmi Google
-      - name: 🤖 Setup Android SDK, Tools, and Java (Official)
-        uses: android/setup-android@v1
+      - name: 🤖 Setup Java (Required for SDK)
+        # Langkah ini hanya untuk Java, yang lebih stabil daripada SDK
+        uses: actions/setup-java@v4
         with:
-          # Versi Java 17
-          java-version: 17
-          # Versi API
-          api-level: ${{ env.ANDROID_API }}
-          # System image dan tools yang dibutuhkan
-          components: 'platform-tools, build-tools/${{ env.ANDROID_API }}.0.0, emulator, system-images;android-${{ env.ANDROID_API }};google_apis;x86_64'
+          distribution: 'temurin'
+          java-version: '17'
+      
+      - name: 📦 Cache Android SDK Components
+        id: cache-sdk
+        uses: actions/cache@v3
+        with:
+          path: |
+            ${{ env.ANDROID_SDK_ROOT }}
+          # Kita mencache seluruh direktori SDK ROOT
+          key: ${{ runner.os }}-android-sdk-${{ env.ANDROID_API }}-${{ hashFiles('**/sdk-install-marker.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-android-sdk-${{ env.ANDROID_API }}-
           
-      # Kunci: Sekarang avdmanager dan emulator sudah ada di PATH
+      - name: 🔧 Install/Restore Android SDK Components
+        run: |
+          export ANDROID_HOME=${{ env.ANDROID_SDK_ROOT }}
+          mkdir -p $ANDROID_HOME
+          
+          if [[ "${{ steps.cache-sdk.outputs.cache-hit }}" != "true" ]]; then
+              echo "Cache SDK tidak ditemukan. Menginstal Command Line Tools..."
+              # Unduh dan ekstrak Command Line Tools secara manual (SDK Manager biner)
+              SDK_TOOLS_URL="https://dl.google.com/android/repository/commandlinetools-linux-8098552_latest.zip"
+              wget -q $SDK_TOOLS_URL -O cmdline-tools.zip
+              unzip -q cmdline-tools.zip -d $ANDROID_HOME/cmdline-tools-temp
+              
+              # Pindahkan isinya ke 'latest' sesuai struktur baru
+              mkdir -p $ANDROID_HOME/cmdline-tools/latest
+              mv $ANDROID_HOME/cmdline-tools-temp/cmdline-tools/* $ANDROID_HOME/cmdline-tools/latest/
+              rm -rf $ANDROID_HOME/cmdline-tools-temp
+              
+              # TAMBAHKAN PATH biner SDK Manager yang baru diinstal
+              echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH 
+              
+              echo "Menginstal platform dan system-image..."
+              # Gunakan sdkmanager yang baru ditemukan
+              echo "y" | sdkmanager \
+                "platform-tools" \
+                "platforms;android-${{ env.ANDROID_API }}" \
+                "emulator" \
+                "system-images;android-${{ env.ANDROID_API }};google_apis;x86_64"
+              
+              touch sdk-install-marker.txt
+          else
+              echo "Cache SDK ditemukan. Memulihkan PATH..."
+              # Jika cache ditemukan, kita hanya perlu mengatur PATH
+              echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH 
+              echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH 
+              echo "$ANDROID_HOME/emulator" >> $GITHUB_PATH 
+          fi
+
+
       - name: 🏗️ Create AVD (Always Run)
         run: |
+          # AVD Manager sekarang harus ada di PATH
           echo "no" | avdmanager create avd -n ${{ env.AVD_NAME }} -k "system-images;android-${{ env.ANDROID_API }};google_apis;x86_64" --device "pixel" --force
           avdmanager list avd
 
@@ -134,7 +177,7 @@ jobs:
           sudo -u ${{ env.VNC_USER }} nohup emulator -avd ${{ env.AVD_NAME }} -gpu swiftshader_indirect -no-audio -accel off &
           
           echo "Menunggu 120 detik agar emulator boot..."
-          sleep 120 
+          sleep 30 
           
           adb devices
           
