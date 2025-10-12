@@ -4,22 +4,6 @@ name: Windows RDP via Tailscale (A)
 on:
   workflow_dispatch:
     inputs:
-      ts_tailnet:
-        description: "Tailscale tailnet (e.g. you@gmail.com)"
-        required: true
-      ts_api_key:
-        description: "Tailscale API key (device admin, no 'Bearer')"
-        required: true
-      ts_authkey:
-        description: "Tailscale auth key (reusable or ephemeral)"
-        required: true
-      gh_api_token:
-        description: "GitHub Personal Access Token (classic; scopes: repo, workflow)"
-        required: true
-      test_mode:
-        description: "Run 5-minute test loop"
-        type: boolean
-        default: false
       runtime_minutes:
         description: "Runtime in minutes (max 360; capped to 355)"
         required: false
@@ -66,11 +50,11 @@ jobs:
         # Hapus 'defaults: run: shell: pwsh' karena sudah global, 
         # dan ubah sintaks PowerShell ke Bash
         env:
-          RAW_TAILNET: ${{ inputs.ts_tailnet }}
-          RAW_APIKEY: ${{ inputs.ts_api_key }}
-          RAW_AUTHKEY: ${{ inputs.ts_authkey }}
-          RAW_PAT: ${{ inputs.gh_api_token }}
-          RAW_TEST: ${{ inputs.test_mode == true && 'true' || 'false' }}
+          RAW_TAILNET: ${{ vars.TAILNET }}
+          RAW_APIKEY: ${{ vars.APIKEY }}
+          RAW_AUTHKEY: ${{ vars.AUTHKEY }}
+          RAW_PAT: ${{ vars.GH_TOKEN }}
+          RAW_TEST: false
           RAW_RUNTIME: ${{ inputs.runtime_minutes || '355' }}
           RAW_LOOPS: ${{ inputs.loops || '0' }}
         run: |
