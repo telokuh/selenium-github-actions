@@ -19,7 +19,7 @@ env:
 jobs:
   run-docker-emulator:
     runs-on: ubuntu-latest 
-    timeout-minutes: 370
+    timeout-minutes: 1
     
     steps:
       - uses: actions/checkout@v4
@@ -161,5 +161,5 @@ jobs:
             # Panggil adb tanpa jalur SDK eksplisit (Perbaikan adb path)
             docker exec android-emu adb shell echo "Container is alive." || true
             
-            sleep 3
+            sleep 30
           done
