@@ -154,9 +154,8 @@ jobs:
           echo "derp=$derp" >> $GITHUB_OUTPUT
           
           # Ringkasan VNC
-          echo "### VNC (Linux)`nHost: $TS_HOSTNAME`nIPv4: $ip4`nMagicDNS: $fqdn`nDERP: $derp`nRemote Desktop: VNC (port ${{ env.VNC_PORT }})`nUser/Pass: (Gunakan VNC Client)`nPassword VNC: ${{ env.VNC_PASS }}`n" | tee -a $GITHUB_STEP_SUMMARY
+          echo -e "### VNC (Linux)\nHost: ${{ env.TS_HOSTNAME }}\nIPv4: $ip4\nMagicDNS: $fqdn\nDERP: $derp\nRemote Desktop: VNC (port ${{ env.VNC_PORT }})\nUser/Pass: (Gunakan VNC Client)\nPassword VNC: ${{ env.VNC_PASS }}\n" | tee -a $GITHUB_STEP_SUMMARY
 
----
 
       - name: 🤖 Setup Android SDK and Emulator
         uses: actions/setup-java@v4
@@ -204,12 +203,6 @@ jobs:
           # Cek status AVD
           adb devices
           
-      - name: Clean up apt cache
-        run: |
-          sudo rm -f /var/cache/apt/archives/lock
-          sudo rm -f /var/lib/apt/lists/lock
-          sudo rm -rf /var/cache/apt/archives/partial
-          sudo rm -rf /var/lib/apt/lists/partial
 
       - name: ⏳ Keep alive
         run: |
@@ -264,3 +257,10 @@ jobs:
               echo "Deleted at exit: $DEVICE_NAME"
             fi
           done
+      - name: Clean up apt cache
+        run: |
+          sudo rm -f /var/cache/apt/archives/lock
+          sudo rm -f /var/lib/apt/lists/lock
+          sudo rm -rf /var/cache/apt/archives/partial
+          sudo rm -rf /var/lib/apt/lists/partial
+          
