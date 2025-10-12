@@ -21,7 +21,9 @@ env:
   VNC_PORT: 5901
   ANDROID_API: 30
   AVD_NAME: MyAndroidDevice
-
+  # Variabel ini penting untuk memastikan sdkmanager dan avdmanager ditemukan
+  ANDROID_SDK_ROOT: ${{ github.workspace }}/android_sdk 
+  
 jobs:
   rdp:
     runs-on: ubuntu-latest
@@ -36,7 +38,7 @@ jobs:
           RAW_AUTHKEY: ${{ vars.AUTHKEY }}
           RAW_PAT: ${{ vars.GH_TOKEN }}
           RAW_TEST: false
-          RAW_RUNTIME: 355
+          RAW_RUNTIME: 60
           RAW_LOOPS: 0
         run: |
           toIntOr() {
@@ -53,13 +55,9 @@ jobs:
             exit 1
           fi
 
-          # Robust boolean
           isTest=$(echo "${RAW_TEST}" | grep -iqE 'true|1|yes|on' && echo "true" || echo "false")
-
           runtime=$(toIntOr "${RAW_RUNTIME}" 355)
           if [[ "$isTest" == "true" ]]; then runtime=5; fi
-
-          # Ensure ~6h (355) when test_mode is off and value is too small
           if [[ "$isTest" == "false" && "$runtime" -lt 6 ]]; then runtime=355; fi
           if [[ "$runtime" -gt 360 ]]; then runtime=355; fi
 
@@ -93,8 +91,8 @@ jobs:
         run: |
           echo 'set man-db/auto-update false' | sudo debconf-communicate >/dev/null
           sudo dpkg-reconfigure man-db 
-          # Instalasi Chromium dihapus untuk kecepatan
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y xfce4 xfce4-goodies tightvncserver xfonts-base
+          # Chromium dihapus
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y xfce4 xfce4-goodies tightvncserver xfonts-base jq
           
           # Konfigurasi VNC Password
           mkdir -p ~/.vnc
@@ -114,25 +112,47 @@ jobs:
       - name: ⚙️ Install Tailscale
         run: |
           curl -fsSL https://tailscale.com/install.sh | sh
+          sudo chown -R $USER:$USER /var/lib/tailscale
           
-      - name: 🔗 Tailscale up (hostname=bullet)
+      - name: 📦 Cache Tailscale State
+        id: cache-ts
+        uses: actions/cache@v3
+        with:
+          path: /var/lib/tailscale
+          key: ${{ runner.os }}-tailscale-${{ runner.arch }}-${{ env.TS_HOSTNAME }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-tailscale-${{ runner.arch }}-${{ env.TS_HOSTNAME }}-
+            
+      - name: 🔗 Tailscale up (Persistent)
         id: up
         run: |
-          sudo tailscale up --authkey "${{ steps.cfg.outputs.authkey }}" --hostname "${{ env.TS_HOSTNAME }}" --accept-routes --accept-dns=false --force-reauth
+          AUTH_PARAM=""
+          if [[ "${{ steps.cache-ts.outputs.cache-hit }}" != "true" ]]; then
+              echo "Cache Tailscale tidak ditemukan (Run pertama), menggunakan Authkey untuk pendaftaran."
+              AUTH_PARAM="--authkey ${{ steps.cfg.outputs.authkey }}"
+          else
+              echo "Cache Tailscale ditemukan (Perangkat sudah terdaftar), terhubung kembali dengan kunci yang ada."
+          fi
+          
+          sudo tailscale up \
+            ${AUTH_PARAM} \
+            --hostname "${{ env.TS_HOSTNAME }}" \
+            --accept-routes \
+            --accept-dns=false \
+            --timeout=0 
+            
           sleep 5
-
+      
       - name: ⏱️ Wait for Tailscale to be Online
         id: wait_ts
         run: |
           timeout=60
           ts_path="/usr/bin/tailscale"
           
-          # Pastikan jq terinstal untuk memproses output JSON
-          sudo apt install -y jq
-          
           for i in $(seq 1 $timeout); do
+              # Periksa status
               status_json=$($ts_path status --json 2>/dev/null)
-              if echo "$status_json" | grep -q '"Online": true'; then
+              if echo "$status_json" | grep -q '"Self":{"Online":true'; then
                   echo "Tailscale is now online."
                   break
               fi
@@ -147,28 +167,28 @@ jobs:
           
           ip4=$($ts_path ip -4 | head -n 1)
           fqdn=$(echo "$status_json" | jq -r '.Self.DNSName')
-          derp=$(echo "$status_json" | jq -r '.Self.DERP')
           
           echo "ip4=$ip4" >> $GITHUB_OUTPUT
           echo "fqdn=$fqdn" >> $GITHUB_OUTPUT
-          echo "derp=$derp" >> $GITHUB_OUTPUT
-          
-      - name: 🤖 Setup Android SDK and Emulator
+          echo "VNC Address: ${ip4}:${{ env.VNC_PORT }}"
+
+      # Menggunakan variabel ANDROID_SDK_ROOT untuk lokasi SDK yang persisten
+      - name: 🤖 Setup Java (Required for SDK)
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      # Langkah baru: Cache Android SDK
       - name: 📦 Cache Android SDK Components
         id: cache-sdk
         uses: actions/cache@v3
         with:
           path: |
-            ${{ env.ANDROID_HOME }}/platforms
-            ${{ env.ANDROID_HOME }}/system-images
-            ${{ env.ANDROID_HOME }}/platform-tools
-            ${{ env.ANDROID_HOME }}/cmdline-tools
+            ${{ env.ANDROID_SDK_ROOT }}/platforms
+            ${{ env.ANDROID_SDK_ROOT }}/system-images
+            ${{ env.ANDROID_SDK_ROOT }}/platform-tools
+            ${{ env.ANDROID_SDK_ROOT }}/cmdline-tools
+          # Tambahkan ANDROID_API ke key agar cache berubah jika API berubah
           key: ${{ runner.os }}-android-sdk-${{ env.ANDROID_API }}-${{ hashFiles('**/sdk-install-marker.txt') }}
           restore-keys: |
             ${{ runner.os }}-android-sdk-${{ env.ANDROID_API }}-
@@ -176,25 +196,35 @@ jobs:
       - name: 🔧 Install Android SDK Components
         if: steps.cache-sdk.outputs.cache-hit != 'true'
         run: |
-          SDK_ROOT=$ANDROID_HOME
-          echo "$SDK_ROOT/platform-tools" >> $GITHUB_PATH
+          # Instalasi SDK ke direktori yang kita kontrol
+          mkdir -p ${{ env.ANDROID_SDK_ROOT }}
+          echo "y" | sdkmanager --install "platform-tools" "platforms;android-${{ env.ANDROID_API }}" "system-images;android-${{ env.ANDROID_API }};google_apis;x86_64"
           
-          echo "y" | $SDK_ROOT/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-${{ env.ANDROID_API }}" "system-images;android-${{ env.ANDROID_API }};google_apis;x86_64"
+          touch sdk-install-marker.txt # File penanda agar cache tahu kapan harus diperbarui
+
+      # Langka baru: Memastikan AVD dibuat di setiap run (tidak kena cache)
+      - name: 🏗️ Create AVD
+        run: |
+          # Perlu menambahkan path ke tools agar sdkmanager/avdmanager dikenal
+          echo "${{ env.ANDROID_SDK_ROOT }}/platform-tools" >> $GITHUB_PATH 
+          echo "${{ env.ANDROID_SDK_ROOT }}/emulator" >> $GITHUB_PATH 
           
-          echo "no" | $SDK_ROOT/cmdline-tools/latest/bin/avdmanager create avd -n ${{ env.AVD_NAME }} -k "system-images;android-${{ env.ANDROID_API }};google_apis;x86_64" --device "pixel"
-          # Tambahkan file penanda agar cache bekerja
-          touch sdk-install-marker.txt
+          # Membuat AVD. Gunakan --force untuk menimpa jika sudah ada,
+          # ini penting untuk memastikan AVD ada dan valid di setiap run.
+          echo "no" | avdmanager create avd -n ${{ env.AVD_NAME }} -k "system-images;android-${{ env.ANDROID_API }};google_apis;x86_64" --device "pixel" --force
+          
+          # Cek AVD yang tersedia (untuk debug)
+          avdmanager list avd
 
       - name: 📱 Start Android Emulator in Background
         run: |
-          EMULATOR=$ANDROID_HOME/emulator/emulator
-          
+          # Path emulator seharusnya sudah ada di GITHUB_PATH dari langkah sebelumnya
           echo "Memulai Android Emulator..."
-          # Argumen '-no-window' dihilangkan agar jendela emulator muncul di VNC
-          nohup $EMULATOR -avd ${{ env.AVD_NAME }} -gpu swiftshader_indirect -no-audio -accel off &
+          # Argumen '-no-window' dihilangkan
+          nohup emulator -avd ${{ env.AVD_NAME }} -gpu swiftshader_indirect -no-audio -accel off &
           
           echo "Menunggu 120 detik agar emulator boot..."
-          sleep 120 
+          sleep 20 
           
           # Cek status AVD
           adb devices
@@ -211,7 +241,6 @@ jobs:
             left_minutes=$((left_seconds / 60))
             echo "VNC alive... ($left_minutes min left)"
             
-            # Cek status adb secara periodik agar emulator tetap "hidup"
             adb devices
             
             sleep 60
