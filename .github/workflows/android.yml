@@ -92,7 +92,7 @@ jobs:
           # Instal Xfce4 Desktop Environment, TigerVNC, dan browser
           # Mengganti 'firefox-esr' dengan 'chromium-browser'
           sudo apt update
-          sudo apt install -y xfce4 xfce4-goodies tightvncserver chromium-browser
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y xfce4 xfce4-goodies tightvncserver chromium-browser
           
           # Konfigurasi VNC Password (Anda harus terhubung dengan password ini)
           mkdir -p ~/.vnc
@@ -154,7 +154,7 @@ jobs:
           echo "derp=$derp" >> $GITHUB_OUTPUT
           
           # Ringkasan VNC
-          echo -e "### VNC (Linux)\nHost: ${{ env.TS_HOSTNAME }}\nIPv4: $ip4\nMagicDNS: $fqdn\nDERP: $derp\nRemote Desktop: VNC (port ${{ env.VNC_PORT }})\nUser/Pass: (Gunakan VNC Client)\nPassword VNC: ${{ env.VNC_PASS }}\n" | tee -a $GITHUB_STEP_SUMMARY
+          #echo -e "### VNC (Linux)\nHost: ${{ env.TS_HOSTNAME }}\nIPv4: $ip4\nMagicDNS: $fqdn\nDERP: $derp\nRemote Desktop: VNC (port ${{ env.VNC_PORT }})\nUser/Pass: (Gunakan VNC Client)\nPassword VNC: ${{ env.VNC_PASS }}\n" | tee -a $GITHUB_STEP_SUMMARY
 
 
       - name: 🤖 Setup Android SDK and Emulator
@@ -257,10 +257,10 @@ jobs:
               echo "Deleted at exit: $DEVICE_NAME"
             fi
           done
+          
       - name: Clean up apt cache
         run: |
           sudo rm -f /var/cache/apt/archives/lock
           sudo rm -f /var/lib/apt/lists/lock
           sudo rm -rf /var/cache/apt/archives/partial
           sudo rm -rf /var/lib/apt/lists/partial
-          
