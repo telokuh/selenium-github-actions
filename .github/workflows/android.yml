@@ -122,26 +122,35 @@ jobs:
           key: ${{ runner.os }}-tailscale-${{ runner.arch }}-${{ env.TS_HOSTNAME }}-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-tailscale-${{ runner.arch }}-${{ env.TS_HOSTNAME }}-
-            
+
+     
+
       - name: 🔗 Tailscale up (Persistent)
         id: up
         run: |
-          AUTH_PARAM=""
+          # Parameter yang dibutuhkan untuk koneksi (selalu ada)
+          CONN_PARAMS="--accept-routes --accept-dns=false --timeout=0"
+          
+          # Parameter yang hanya dibutuhkan untuk pendaftaran (authkey dan hostname)
+          REGISTRATION_PARAMS=""
+
           if [[ "${{ steps.cache-ts.outputs.cache-hit }}" != "true" ]]; then
-              echo "Cache Tailscale tidak ditemukan (Run pertama), menggunakan Authkey untuk pendaftaran."
-              AUTH_PARAM="--authkey ${{ steps.cfg.outputs.authkey }}"
+              echo "Cache Tailscale tidak ditemukan (Run pertama), menggunakan Authkey dan Hostname untuk pendaftaran."
+              # Gabungkan authkey DAN hostname ke dalam REGISTRATION_PARAMS
+              REGISTRATION_PARAMS="--authkey ${{ steps.cfg.outputs.authkey }} --hostname ${{ env.TS_HOSTNAME }}"
           else
               echo "Cache Tailscale ditemukan (Perangkat sudah terdaftar), terhubung kembali dengan kunci yang ada."
+              # Pada run berikutnya, kita hanya perlu memastikan hostname sudah disetel
+              CONN_PARAMS="${CONN_PARAMS} --hostname ${{ env.TS_HOSTNAME }}"
           fi
           
-          sudo tailscale up \
-            ${AUTH_PARAM} \
-            --hostname "${{ env.TS_HOSTNAME }}" \
-            --accept-routes \
-            --accept-dns=false \
-            --timeout=0 
+          # Jalankan tailscale up dengan semua parameter yang diperlukan
+          sudo tailscale up ${REGISTRATION_PARAMS} ${CONN_PARAMS}
             
           sleep 5
+      
+      
+      
       
       - name: ⏱️ Wait for Tailscale to be Online
         id: wait_ts
