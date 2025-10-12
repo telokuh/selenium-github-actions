@@ -15,7 +15,7 @@ env:
   # Konfigurasi Android
   ANDROID_API: 30
   AVD_NAME: MyAndroidDevice
-  # HAPUS ANDROID_SDK_ROOT KARENA AKAN DITETAPKAN OLEH ACTION
+  # ANDROID_HOME akan ditetapkan oleh action Google
   # Konfigurasi Tailscale
   TS_HOSTNAME: gh-android-novnc
   
@@ -30,10 +30,12 @@ jobs:
       - name: 🔧 Fix APT Cache Permissions
         run: |
           echo "set man-db/auto-update false" | sudo DEBIAN_FRONTEND=noninteractive debconf-communicate || true
+          # Perbaiki izin untuk APT dan Debconf cache
           sudo chown -R $USER:$USER /var/cache/apt
           sudo chown -R $USER:$USER /var/lib/apt
           sudo chown -R $USER:$USER /var/cache/debconf
           
+          # Hapus lock files
           sudo rm -f /var/cache/apt/archives/lock
           sudo rm -f /var/lib/apt/lists/lock
           sudo rm -f /var/cache/debconf/config.dat
@@ -92,7 +94,7 @@ jobs:
           AUTH_PARAM=""
           if [[ "${{ steps.cache-ts.outputs.cache-hit }}" != "true" ]]; then
               echo "Cache Tailscale tidak ditemukan, menggunakan Authkey untuk pendaftaran."
-              AUTH_PARAM="--authkey ${{ vars.AUTHKEY }}"
+              AUTH_PARAM="--authkey ${{ secrets.TAILSCALE_AUTHKEY }}"
           else
               echo "Cache Tailscale ditemukan, terhubung kembali."
           fi
@@ -106,27 +108,27 @@ jobs:
             
           sleep 5
 
-      # --- [ BAGIAN SETUP ANDROID EMULATOR DENGAN ACTION KHUSUS ] ---
+      # --- [ BAGIAN SETUP ANDROID EMULATOR (OFFICIAL) ] ---
 
-      # Menggantikan 4 langkah manual (Java, 2x SDK, 1x Cache)
-      - name: 🤖 Setup Android SDK and AVD
-        uses: android-setup/android-sdk-setup@v1
+      # Menggantikan semua langkah Java/SDK dengan action resmi Google
+      - name: 🤖 Setup Android SDK, Tools, and Java (Official)
+        uses: android/setup-android@v1
         with:
+          # Versi Java 17
+          java-version: 17
+          # Versi API
           api-level: ${{ env.ANDROID_API }}
-          # Instal semua komponen, termasuk emulator dan system image
-          components: '["platform-tools", "platforms;android-${{ env.ANDROID_API }}", "emulator", "system-images;android-${{ env.ANDROID_API }};google_apis;x86_64"]'
+          # System image dan tools yang dibutuhkan
+          components: 'platform-tools, build-tools/${{ env.ANDROID_API }}.0.0, emulator, system-images;android-${{ env.ANDROID_API }};google_apis;x86_64'
           
+      # Kunci: Sekarang avdmanager dan emulator sudah ada di PATH
       - name: 🏗️ Create AVD (Always Run)
         run: |
-          # avdmanager sekarang sudah ada di PATH
           echo "no" | avdmanager create avd -n ${{ env.AVD_NAME }} -k "system-images;android-${{ env.ANDROID_API }};google_apis;x86_64" --device "pixel" --force
           avdmanager list avd
 
       - name: 📱 Start Android Emulator in Background
         run: |
-          # Tambahkan variabel lingkungan yang dibutuhkan emulator (meskipun action sudah melakukannya, ini adalah jaring pengaman)
-          export ANDROID_HOME=$ANDROID_HOME
-          
           echo "Memulai Android Emulator..."
           # Jalankan di bawah user VNC
           sudo -u ${{ env.VNC_USER }} nohup emulator -avd ${{ env.AVD_NAME }} -gpu swiftshader_indirect -no-audio -accel off &
