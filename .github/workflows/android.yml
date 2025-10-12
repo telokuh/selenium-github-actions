@@ -12,30 +12,48 @@ env:
   NOVNC_PORT: 6080
   # Konfigurasi Tailscale
   TS_HOSTNAME: gh-kvm-android
-  # Konfigurasi Docker (Menggunakan image yang diminta)
+  # Konfigurasi Docker
   DOCKER_IMAGE: budtmo/docker-android:emulator_13.0
   
 jobs:
   run-docker-emulator:
-    # KVM hanya tersedia dan paling stabil di runner Linux
     runs-on: ubuntu-latest 
     timeout-minutes: 370
     
     steps:
       - uses: actions/checkout@v4
+      
+      # 1. CACHING DOCKER: Menyimpan image dan layer yang diunduh
+      - name: 📦 Cache Docker Layers
+        id: cache-docker
+        uses: actions/cache@v3
+        with:
+          path: /var/lib/docker
+          # Key menggunakan nama image untuk memastikan cache yang benar
+          key: ${{ runner.os }}-docker-${{ hashFiles('run-docker-image-key') }} 
+          restore-keys: |
+            ${{ runner.os }}-docker-
+            
+      # Jika cache tidak ditemukan, unduh image untuk pertama kali
+      - name: Pull Docker Image (if not cached)
+        if: steps.cache-docker.outputs.cache-hit != 'true'
+        run: |
+          echo "Docker cache not hit. Pulling image..."
+          docker pull ${{ env.DOCKER_IMAGE }}
+          # Buat file dummy untuk menandai bahwa image dasar telah di-pull,
+          # ini membantu caching di run berikutnya.
+          touch run-docker-image-key
 
-      # 1. AKTIVASI KVM DI HOST RUNNER
+      # 2. AKTIVASI KVM DI HOST RUNNER
       - name: ⚙️ Enable KVM Hardware Acceleration
         run: |
           echo ">>> Enabling KVM permissions on host..."
-          # Mengatur perizinan 0666 untuk /dev/kvm
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-          # Tambahkan user 'runner' ke grup 'kvm'
           sudo usermod -aG kvm $USER
           
-      # 2. SETUP TAILSCALE PADA HOST RUNNER
+      # 3. SETUP TAILSCALE PADA HOST RUNNER
       - name: 🔗 Setup Tailscale on Host Runner
         run: |
           echo ">>> Installing Tailscale on Host..."
@@ -43,7 +61,6 @@ jobs:
           
       - name: 🔗 Tailscale up (Persistent)
         run: |
-          # Menggunakan vars.AUTHKEY seperti yang diminta
           AUTH_KEY="${{ vars.AUTHKEY }}"
           if [ -z "$AUTH_KEY" ]; then
             echo "Error: vars.AUTHKEY is empty. Please set the Tailscale Auth Key in Repository Variables."
@@ -51,7 +68,6 @@ jobs:
           fi
           
           echo ">>> Connecting Tailscale..."
-          # --network=host tidak diperlukan di sini karena ini adalah host runner.
           sudo tailscale up \
             --authkey "$AUTH_KEY" \
             --hostname ${{ env.TS_HOSTNAME }} \
@@ -61,20 +77,17 @@ jobs:
             
           sleep 5
 
-      # 3. MENJALANKAN DOCKER EMULATOR
+      # 4. MENJALANKAN DOCKER EMULATOR
       - name: 🐳 Run Docker Android Emulator
         id: run-docker
         run: |
-          echo ">>> Pulling and Running Docker Emulator..."
+          echo ">>> Running Docker Emulator..."
           
-          # Cek keberadaan KVM device sebelum menjalankan
           if [ ! -e /dev/kvm ]; then
             echo "WARNING: /dev/kvm not found despite setup. Emulator might fail or run slow."
           fi
           
-          # Perintah 'docker run' dengan KVM dan network host:
-          # --privileged & --device=/dev/kvm: Memungkinkan akselerasi hardware
-          # --network=host: Penting agar Tailscale di host bisa mengakses port container (6080)
+          # Perintah 'docker run' dengan KVM dan network host
           docker run \
             --privileged \
             --detach \
@@ -97,10 +110,9 @@ jobs:
             exit 1
           fi
 
-      # 4. TAMPILKAN URL DAN JAGA TETAP HIDUP
+      # 5. TAMPILKAN URL DAN JAGA TETAP HIDUP
       - name: Show Connection URL and Keep Alive
         run: |
-          # Pastikan Tailscale online
           TAILSCALE_IP=$(tailscale ip -4 | head -n1)
           VNC_URL="http://${TAILSCALE_IP}:${{ env.NOVNC_PORT }}/vnc.html"
 
@@ -112,13 +124,16 @@ jobs:
           echo "==========================================="
           
           echo ">>> Keeping runner and container alive (Timeout 370 mins)..."
-          # Loop keep alive, memantau container
+          # Loop keep alive:
+          # Menggunakan 'adb shell' tanpa jalur SDK eksplisit (perbaikan adb path)
           while true; do
             if ! docker ps | grep -q "android-emu"; then
               echo "Docker container stopped. Ending job."
               exit 1
             fi
-            # Kirim sinyal adb/ping setiap 5 menit (300 detik) untuk menjaga koneksi tetap hidup
-            docker exec android-emu /opt/android-sdk/platform-tools/adb shell echo "Container is alive." || true
+            
+            # Panggil adb tanpa jalur SDK eksplisit (mengandalkan PATH internal container)
+            docker exec android-emu adb shell echo "Container is alive." || true
+            
             sleep 300 
           done
