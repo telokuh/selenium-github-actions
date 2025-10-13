@@ -1,4 +1,4 @@
-name: Setup XFCE Runner + Tailscale
+name: Setup XFCE Runner + Tailscale + noVNC
 
 on:
   workflow_dispatch:
@@ -13,7 +13,9 @@ jobs:
       TAILSCALE_AUTHKEY: ${{ vars.AUTHKEY }}
       USERNAME: runner
       PASSWORD: runner
-      TAILSCALE_HOSTNAME: gh-xfce-${{ github.run_id }}
+      TAILSCALE_HOSTNAME: gh-xfce-vnc-${{ github.run_id }}
+      VNC_PORT: 5901
+      WEBSOCKET_PORT: 6080
 
     steps:
       - name: Checkout Code
@@ -25,12 +27,12 @@ jobs:
         id: cache-restore
         with:
           path: /var/cache/apt/archives
-          # Kunci yang stabil untuk paket
-          key: ${{ runner.os }}-apt-xfce-xrdp-tailscale-v1
+          # Kunci VNC/noVNC
+          key: ${{ runner.os }}-apt-xfce-vnc-tailscale-v1
           restore-keys: |
-            ${{ runner.os }}-apt-xfce-xrdp-tailscale-
+            ${{ runner.os }}-apt-xfce-vnc-tailscale-
             ${{ runner.os }}-apt-
-      
+
       # --- SETUP USER & SUDO ---
       - name: Ensure runner user has sudo
         run: |
@@ -43,36 +45,33 @@ jobs:
           echo ">>> Installing Tailscale Repository..."
           curl -fsSL https://tailscale.com/install.sh | sudo sh
           
-      # --- INSTALASI XFCE, XRDP, DAN TAILSCALE CLIENT (TERMASUK PERBAIKAN LAYAR HITAM) ---
-      - name: Install XFCE, xrdp, and Tailscale client & Fix Black Screen
+      # --- INSTALASI XFCE, VNC, WEBSOCKIFY, DAN TAILSCALE CLIENT ---
+      - name: Install XFCE, VNC Server, noVNC tools, and Tailscale client
         run: |
-          echo ">>> Installing lightweight XFCE Desktop, xrdp, and Tailscale client..."
+          echo ">>> Installing XFCE, VNC, noVNC, and Tailscale client..."
           sudo apt-get update -qq
 
+          # Paket XFCE + TigerVNC + websockify/noVNC (Ganti xrdp dengan vnc/websockify)
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-            xfce4 xfce4-goodies xorg dbus-x11 xrdp tailscale
+            xfce4 xfce4-goodies xorg dbus-x11 git python3-websockify \
+            tigervnc-standalone-server tigervnc-common tigervnc-tools tailscale
 
-          # --- PERBAIKAN LAYAR HITAM (KONFIGURASI SESI XFCE) ---
-          XFCE_CONFIG="/home/${USERNAME}/.xsession"
+          # Clone noVNC
+          git clone https://github.com/novnc/noVNC.git /opt/noVNC
+          ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
           
-          echo "#!/bin/bash" | sudo tee ${XFCE_CONFIG}
-          echo "export DISPLAY=:1" | sudo tee -a ${XFCE_CONFIG}
-          echo "export XDG_SESSION_TYPE=x11" | sudo tee -a ${XFCE_CONFIG}
-          echo "export XDG_CURRENT_DESKTOP=XFCE" | sudo tee -a ${XFCE_CONFIG}
-          echo "exec startxfce4" | sudo tee -a ${XFCE_CONFIG}
-          
-          sudo chmod +x ${XFCE_CONFIG}
-          sudo chown ${USERNAME}:${USERNAME} ${XFCE_CONFIG}
-          
-          sudo rm -f /etc/skel/.xsession
-          echo "xfce4-session" | sudo tee /etc/skel/.xsession
-          
-          # Arahkan xrdp untuk selalu menggunakan XFCE saat memulai sesi
-          sudo sed -i 's/exec startxfce4/xfce4-session/g' /etc/xrdp/startwm.sh
-          # --- AKHIR PERBAIKAN ---
+          # --- KONFIGURASI VNC & XFCE ---
+          # 1. Atur password VNC untuk user runner
+          mkdir -p /home/${USERNAME}/.vnc
+          echo ${PASSWORD} | vncpasswd -f > /home/${USERNAME}/.vnc/passwd
+          chmod 600 /home/${USERNAME}/.vnc/passwd
+          chown -R ${USERNAME}:${USERNAME} /home/${USERNAME}/.vnc
 
-          sudo systemctl enable --now xrdp
-          sudo systemctl restart xrdp
+          # 2. Atur start-up XFCE untuk VNC
+          echo "startxfce4" > /home/${USERNAME}/.xsession
+          chown ${USERNAME}:${USERNAME} /home/${USERNAME}/.xsession
+          
+          # --- AKHIR KONFIGURASI ---
 
       # --- KONFIGURASI TAILSCALE ---
       - name: Start Tailscale
@@ -80,18 +79,33 @@ jobs:
           echo ">>> Starting Tailscale..."
           sudo tailscale up --authkey "${TAILSCALE_AUTHKEY}" --hostname "${TAILSCALE_HOSTNAME}"
 
-      # --- INFO KONEKSI & KEEP ALIVE ---
-      - name: Connection Info + Keep Alive
-        id: keep-alive
+      # --- START VNC & NO VNC PROXY ---
+      - name: Start VNC + noVNC proxy
+        id: start-vnc
         run: |
-          echo "=== FINAL CONNECTION INFO ==="
+          # 1. Mulai server VNC pada display :1
+          echo ">>> Starting VNC server on :1..."
+          sudo -u ${USERNAME} vncserver :1 -geometry 1280x800 -depth 24 -localhost no
+
+          # 2. Mulai websockify (proxy VNC ke WebSocket)
+          echo ">>> Starting noVNC websockify..."
+          nohup websockify --web=/opt/noVNC ${WEBSOCKET_PORT} localhost:${VNC_PORT} &
+
+          # 3. Dapatkan IP Tailscale
+          TAILSCALE_IP=$(tailscale ip -4 | head -n1)
+
+          echo "=== CONNECTION INFO ==="
           echo "USERNAME: ${USERNAME}"
           echo "PASSWORD: ${PASSWORD}"
-          echo "Tailscale IPs:"
-          sudo tailscale ip -4
           echo
-          echo ">>> Connect with any RDP client using the IP above (port 3389)."
+          echo "VNC Client (TigerVNC/RealVNC):"
+          echo "    ${TAILSCALE_IP}:${VNC_PORT}"
+          echo
+          echo "noVNC URL (Browser):"
+          echo "    http://${TAILSCALE_IP}:${WEBSOCKET_PORT}/"
+          echo
           echo ">>> Keeping runner alive until manually cancelled..."
+          # Jaga runner tetap berjalan.
           while true; do
             sleep 300
           done
@@ -101,11 +115,11 @@ jobs:
           sudo rm -f /var/lib/apt/lists/lock
           sudo rm -rf /var/cache/apt/archives/partial
           sudo rm -rf /var/lib/apt/lists/partial
-      # --- 2. SAVE CACHE KONDISIONAL (TERPERBAIKI!) ---
+      # --- 2. SAVE CACHE KONDISIONAL ---
       - name: Save APT packages Cache (ALWAYS RUN)
         uses: actions/cache/save@v4
         if: always()
         with:
           path: /var/cache/apt/archives
-          # Kunci yang sama dengan langkah restore untuk menghindari warning!
-          key: ${{ runner.os }}-apt-xfce-xrdp-tailscale-v1
+          # Kunci yang diperbarui untuk VNC/noVNC
+          key: ${{ runner.os }}-apt-xfce-vnc-tailscale-v1
