@@ -14,7 +14,6 @@ echo ">>> BAGIAN 1: INSTALASI DEPENDENSI (Termasuk XRDP)"
 echo "=================================================="
 
 echo ">>> Menginstal Tailscale Repository..."
-# Menginstal Tailscale Repository
 curl -fsSL https://tailscale.com/install.sh | sudo sh
 
 echo ">>> Menginstal XFCE, VNC, noVNC tools, Tailscale client, dan XRDP..."
@@ -43,39 +42,27 @@ echo "=================================================="
 # 1. Atur password VNC untuk user runner
 echo ">>> Mengatur password VNC untuk user: $USERNAME..."
 mkdir -p /home/${USERNAME}/.vnc
-# Membuat file passwd VNC (menggunakan password dari variabel lingkungan)
 echo ${PASSWORD} | vncpasswd -f > /home/${USERNAME}/.vnc/passwd
 chmod 600 /home/${USERNAME}/.vnc/passwd
 sudo chown -R ${USERNAME}:${USERNAME} /home/${USERNAME}/.vnc
 
 # 2. Atur start-up XFCE
-# Skrip ini akan dipanggil oleh vncserver dan xrdp
 echo "#!/bin/sh
 xrdb $HOME/.Xresources
 startxfce4" > /home/${USERNAME}/.xsession
 sudo chown ${USERNAME}:${USERNAME} /home/${USERNAME}/.xsession
-chmod +x /home/${USERNAME}/.xsession # Pastikan bisa dieksekusi
+chmod +x /home/${USERNAME}/.xsession
 
 # --- KONFIGURASI XRDP ---
 echo ">>> Mengkonfigurasi XRDP..."
-
-# 1. Gunakan Xvnc sebagai backend untuk Xrdp.
-# Xrdp akan mengelola sesi, dan Xvnc akan menyediakan tampilan grafis.
-# File startwm.sh standar harus disesuaikan untuk XFCE.
-# Kita akan buat file .xsession di atas sudah cukup, tapi kita tambahkan file /etc/xrdp/startwm.sh
-# untuk memastikan Xrdp menggunakan XFCE.
-
-# Kita buat file startwm.sh di /etc/xrdp
-# Ini biasanya mengarahkan ke ~/.xsession
-sudo sed -i 's|#startwm=...|startwm=...|' /etc/xrdp/xrdp.ini # hapus komentar jika perlu
-sudo echo "startxfce4" > /etc/xrdp/startwm.sh # Ganti skrip default dengan startxfce4
+sudo echo "startxfce4" > /etc/xrdp/startwm.sh
 sudo chmod +x /etc/xrdp/startwm.sh
-
-# 2. Tambahkan user ke grup ssl-cert untuk akses port RDP
-# Xrdp berjalan sebagai service, ini membantu dengan izin
 sudo usermod -a -G ssl-cert ${USERNAME}
-sudo systemctl enable xrdp # Aktifkan service
-sudo systemctl start xrdp # Mulai service
+
+# Pastikan XRDP dimulai SEBELUM kita menjalankan socat.
+echo ">>> Memulai service XRDP..."
+sudo systemctl enable xrdp
+sudo systemctl start xrdp
 
 echo "=================================================="
 echo ">>> BAGIAN 3: START LAYANAN (TAILSCALE, VNC, NOVNC)"
@@ -83,34 +70,36 @@ echo "=================================================="
 
 # --- KONFIGURASI TAILSCALE ---
 echo ">>> Memulai Tailscale..."
-# --reset untuk memastikan konfigurasi bersih jika runner digunakan kembali
 sudo tailscale up --authkey "${TAILSCALE_AUTHKEY}" --hostname "${TAILSCALE_HOSTNAME}" --reset --accept-dns=false
 
-# Port RDP Standar: 3389
-RDP_PORT=3389
+# Port INTERNAL standar yang sudah dipakai oleh layanan:
+VNC_REAL_PORT=5901 # Port internal vncserver :1
+RDP_REAL_PORT=3389 # Port internal xrdp
 
-# Port VNC Internal (biasanya 5900 + display number, yaitu 5901 untuk :1)
-VNC_REAL_PORT=5901
+# Port yang akan didengarkan oleh socat di antarmuka Tailscale:
+VNC_PORT_LISTEN=${VNC_PORT:-5902}       # Default: 5902 (diganti dari 5901)
+RDP_PORT_LISTEN=${RDP_PORT:-3390}       # Default: 3390 (diganti dari 3389)
+WEBSOCKET_PORT_LISTEN=${WEBSOCKET_PORT:-6080}
 
-# 1. Mulai server VNC (Xvnc) pada display :1 (pastikan binding di localhost)
-echo ">>> Memulai VNC server (Xvnc) pada :1 di localhost..."
-# Jalankan vncserver sebagai user non-root. Xvnc akan menyediakan sesi grafis.
-# CATATAN: Dengan adanya Xrdp, vncserver ini opsional jika kamu hanya ingin RDP. 
-# Tapi karena noVNC (websockify) menggunakan VNC, kita tetap jalankan.
+# 1. Mulai server VNC (Xvnc) pada display :1 (hanya di localhost)
+# Ini menggunakan VNC_REAL_PORT=5901
+echo ">>> Memulai VNC server (Xvnc) pada :1 di localhost:${VNC_REAL_PORT}..."
 sudo -u ${USERNAME} vncserver :1 -geometry 700x800 -depth 24 -localhost
 
 # 2. Start socat (Port Forwarding VNC Mentah)
-echo ">>> Memulai VNC raw TCP forwarding (socat) untuk Tailscale..."
-nohup socat TCP4-LISTEN:${VNC_PORT},fork TCP4:localhost:${VNC_REAL_PORT} &
+# Teruskan dari VNC_PORT_LISTEN ke VNC_REAL_PORT (5901)
+echo ">>> Memulai VNC raw TCP forwarding (socat) dari ${VNC_PORT_LISTEN} ke localhost:${VNC_REAL_PORT}..."
+nohup socat TCP4-LISTEN:${VNC_PORT_LISTEN},fork TCP4:localhost:${VNC_REAL_PORT} &
 
 # 3. Mulai websockify (proxy VNC ke WebSocket - untuk noVNC)
-echo ">>> Memulai noVNC websockify..."
-nohup websockify --web=/opt/noVNC ${WEBSOCKET_PORT} localhost:${VNC_REAL_PORT} &
+# Teruskan dari WEBSOCKET_PORT_LISTEN ke VNC_REAL_PORT (5901)
+echo ">>> Memulai noVNC websockify dari ${WEBSOCKET_PORT_LISTEN} ke localhost:${VNC_REAL_PORT}..."
+nohup websockify --web=/opt/noVNC ${WEBSOCKET_PORT_LISTEN} localhost:${VNC_REAL_PORT} &
 
 # 4. Start socat (Port Forwarding RDP Mentah)
-# Meneruskan koneksi RDP dari antarmuka mana pun (termasuk Tailscale) ke server Xrdp di localhost:3389.
-echo ">>> Memulai RDP raw TCP forwarding (socat) untuk Tailscale..."
-nohup socat TCP4-LISTEN:${RDP_PORT},fork TCP4:localhost:${RDP_PORT} &
+# Teruskan dari RDP_PORT_LISTEN ke RDP_REAL_PORT (3389)
+echo ">>> Memulai RDP raw TCP forwarding (socat) dari ${RDP_PORT_LISTEN} ke localhost:${RDP_REAL_PORT}..."
+nohup socat TCP4-LISTEN:${RDP_PORT_LISTEN},fork TCP4:localhost:${RDP_REAL_PORT} &
 
 # 5. Dapatkan IP Tailscale
 TAILSCALE_IP=$(tailscale ip -4 | head -n1)
@@ -126,17 +115,15 @@ echo "USERNAME: ${USERNAME}"
 echo "PASSWORD: ${PASSWORD}"
 echo
 echo "Klien RDP (Remote Desktop, Remmina):"
-echo "    Alamat: ${TAILSCALE_IP}:${RDP_PORT}"
-echo "    Catatan: Xrdp akan membuat sesi XFCE baru. Gunakan username/password di atas."
+echo "    Alamat: ${TAILSCALE_IP}:${RDP_PORT_LISTEN}"
 echo
 echo "Klien VNC (TigerVNC/RealVNC):"
-echo "    Alamat: ${TAILSCALE_IP}:${VNC_PORT}"
+echo "    Alamat: ${TAILSCALE_IP}:${VNC_PORT_LISTEN}"
 echo
 echo "noVNC URL (Browser):"
-echo "    http://${TAILSCALE_IP}:${WEBSOCKET_PORT}/"
+echo "    http://${TAILSCALE_IP}:${WEBSOCKET_PORT_LISTEN}/"
 echo
 echo ">>> Menjaga runner tetap hidup sampai dibatalkan secara manual..."
-# Jaga skrip ini tetap berjalan untuk menjaga job GitHub Actions tetap aktif.
 while true; do
     sleep 300
 done
