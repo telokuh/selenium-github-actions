@@ -33,6 +33,7 @@ jobs:
           dpkg-reconfigure man-db
       # --- 1. RESTORE CACHE ---
       - name: Restore APT packages Cache
+        if: always()
         uses: actions/cache@v4
         id: cache-restore
         with:
@@ -46,12 +47,14 @@ jobs:
 
       # --- INSTALASI TAILSCALE REPOSITORY ---
       - name: Install Tailscale repository
+        if: always()
         run: |
           echo ">>> Installing Tailscale Repository..."
           curl -fsSL https://tailscale.com/install.sh | sudo sh
           
       # --- INSTALASI XFCE, VNC, WEBSOCKIFY, DAN TAILSCALE CLIENT ---
       - name: Install XFCE, VNC Server, noVNC tools, and Tailscale client
+        if: always()
         run: |
           echo ">>> Installing XFCE, VNC, noVNC, and Tailscale client..."
           sudo apt-get update -qq
@@ -80,11 +83,13 @@ jobs:
 
       # --- KONFIGURASI TAILSCALE ---
       - name: Start Tailscale
+        if: always()
         run: |
           echo ">>> Starting Tailscale..."
           sudo tailscale up --authkey "${TAILSCALE_AUTHKEY}" --hostname "${TAILSCALE_HOSTNAME}"
 
       - name: Start VNC + Port Forwarding
+        if: always()
         id: start-vnc
         run: |
           # 1. Mulai server VNC pada display :1 (pastikan binding di localhost)
