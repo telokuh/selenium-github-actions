@@ -15,9 +15,9 @@ jobs:
       USERNAME: runner
       PASSWORD: runner
       TAILSCALE_HOSTNAME: gh-xfce-vnc-${{ github.run_id }}
-      VNC_PORT: 5901
+      VNC_PORT: 5902
       WEBSOCKET_PORT: 6080
-      RDP_PORT: 3389
+      RDP_PORT: 3390
 
     steps:
       - name: Checkout Code
