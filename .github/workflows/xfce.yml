@@ -124,6 +124,8 @@ jobs:
           sudo rm -f /var/lib/apt/lists/lock
           sudo rm -rf /var/cache/apt/archives/partial
           sudo rm -rf /var/lib/apt/lists/partial
+          sudo rm -rf /var/cache/debconf/config.dat-new
+          sudo rm -rf /var/cache/debconf/passwords.dat
       # --- 2. SAVE CACHE KONDISIONAL ---
       - name: Save APT packages Cache (ALWAYS RUN)
         uses: actions/cache/save@v4
