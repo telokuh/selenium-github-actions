@@ -95,7 +95,12 @@ jobs:
           while true; do
             sleep 300
           done
-          
+      - name: Clean up apt cache
+        run: |
+          sudo rm -f /var/cache/apt/archives/lock
+          sudo rm -f /var/lib/apt/lists/lock
+          sudo rm -rf /var/cache/apt/archives/partial
+          sudo rm -rf /var/lib/apt/lists/partial
       # --- 2. SAVE CACHE KONDISIONAL (TERPERBAIKI!) ---
       - name: Save APT packages Cache (ALWAYS RUN)
         uses: actions/cache/save@v4
