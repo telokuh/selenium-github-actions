@@ -32,8 +32,8 @@ jobs:
         run: |
           sudo chown -R $USER:$USER /var/cache/apt
           sudo chown -R $USER:$USER /var/lib/apt
-          echo "set man-db/auto-update false" | debconf-communicate
-          dpkg-reconfigure man-db
+          
+          
           
       # --- 1. RESTORE CACHE (Tetap) ---
       - name: Restore APT packages Cache
