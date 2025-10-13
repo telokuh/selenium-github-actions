@@ -20,8 +20,8 @@ echo "=================================================="
 echo ">>> Menambahkan Tailscale GPG key dan Repository ke APT..."
 # Ini adalah langkah yang lebih ramah cache APT
 sudo install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.noarch.gpg | sudo tee /etc/apt/keyrings/tailscale.gpg >/dev/null
-curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list
+curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/oracular.noarmor.gpg | sudo tee /etc/apt/keyrings/tailscale.gpg >/dev/null
+curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/oracular.tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list
 
 echo ">>> Menginstal XFCE, VNC, noVNC tools, Tailscale client, dan XRDP..."
 sudo apt-get update -qq
