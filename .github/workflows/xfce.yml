@@ -5,14 +5,13 @@ on:
   workflow_dispatch:
 
 permissions:
-  # Hanya perlu izin read untuk checkout kode
   contents: read
 
 jobs:
   setup-gui-runner:
     runs-on: ubuntu-latest
     env:
-      # Variabel lingkungan yang digunakan di seluruh job
+      # Variabel lingkungan
       TAILSCALE_AUTHKEY: ${{ vars.AUTHKEY }}
       USERNAME: runner
       PASSWORD: runner
@@ -22,19 +21,18 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # --- CACHING APT PACKAGES ---
-      - name: Cache APT packages
-        # Direktori ini menyimpan semua file .deb yang diunduh APT.
-        # Jika cache ditemukan, langkah instalasi akan jauh lebih cepat.
+      # --- 1. RESTORE CACHE ---
+      - name: Restore APT packages Cache
         uses: actions/cache@v4
+        id: cache-restore
         with:
           path: /var/cache/apt/archives
-          # Kunci yang dibuat unik. Ubah 'v1' menjadi 'v2' jika Anda menambah/mengubah paket.
+          # Kunci yang stabil untuk paket XFCE/xrdp/Tailscale
           key: ${{ runner.os }}-apt-xfce-xrdp-tailscale-v1
           restore-keys: |
             ${{ runner.os }}-apt-xfce-xrdp-tailscale-
             ${{ runner.os }}-apt-
-
+      
       # --- SETUP USER & SUDO ---
       - name: Ensure runner user has sudo
         run: |
@@ -44,25 +42,25 @@ jobs:
 
       # --- INSTALASI TAILSCALE REPOSITORY ---
       - name: Install Tailscale repository
-        # Langkah ini menambahkan repo Tailscale, yang TIDAK di-cache, tetapi cepat
+        # Menambahkan repo APT Tailscale. Ini tidak di-cache.
         run: |
           echo ">>> Installing Tailscale Repository..."
           curl -fsSL https://tailscale.com/install.sh | sudo sh
-
+          
       # --- INSTALASI XFCE, XRDP, DAN TAILSCALE CLIENT ---
       - name: Install XFCE, xrdp, and Tailscale client
         run: |
           echo ">>> Installing lightweight XFCE Desktop, xrdp, and Tailscale client..."
           sudo apt-get update -qq
 
-          # apt-get akan menggunakan cache (/var/cache/apt/archives) jika tersedia
+          # apt-get akan menggunakan cache jika tersedia
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
             xfce4 xfce4-goodies xorg dbus-x11 xrdp tailscale
 
           # set up xfce user
           echo "startxfce4" | sudo tee /home/${USERNAME}/.xsession
           sudo chown ${USERNAME}:${USERNAME} /home/${USERNAME}/.xsession
-
+          
           # make xrdp use xfce
           echo "exec startxfce4" | sudo tee /etc/skel/.xsession
           echo "startxfce4" | sudo tee /etc/skel/.xinitrc
@@ -75,23 +73,30 @@ jobs:
       - name: Start Tailscale
         run: |
           echo ">>> Starting Tailscale..."
-          # Menggunakan AUTHKEY dari Secrets/Vars Anda untuk otentikasi
           sudo tailscale up --authkey "${TAILSCALE_AUTHKEY}" --hostname "${TAILSCALE_HOSTNAME}"
 
       # --- INFO KONEKSI & KEEP ALIVE ---
       - name: Connection Info + Keep Alive
+        id: keep-alive
         run: |
           echo "=== FINAL CONNECTION INFO ==="
           echo "USERNAME: ${USERNAME}"
           echo "PASSWORD: ${PASSWORD}"
           echo "Tailscale IPs:"
-          # Tampilkan IP Tailscale untuk koneksi RDP
-          IP_ADDR=$(sudo tailscale ip -4 | head -n1)
-          echo "${IP_ADDR}"
+          sudo tailscale ip -4
           echo
           echo ">>> Connect with any RDP client using the IP above (port 3389)."
-          echo ">>> Keeping runner alive for 10 minutes (600 seconds) to maintain RDP session..."
-          # Jaga runner tetap berjalan (agar koneksi RDP stabil)
+          echo ">>> Keeping runner alive until manually cancelled..."
+          # Jaga runner tetap berjalan. Pembatalan akan memicu langkah cache berikutnya.
           while true; do
-            sleep 600
+            sleep 300
           done
+          
+      # --- 2. SAVE CACHE KONDISIONAL (PENTING!) ---
+      - name: Save APT packages Cache (ALWAYS RUN)
+        uses: actions/cache/save@v4
+        # Kunci PENTING: selalu jalankan langkah ini, bahkan jika job dibatalkan atau gagal!
+        if: always()
+        with:
+          path: /var/cache/apt/archives
+          key: ${{ steps.cache-restore.outputs.cache-primary-key }}
