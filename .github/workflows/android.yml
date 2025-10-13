@@ -24,8 +24,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      # --- 1. DOCKER SETUP & CACHE RESTORE ---
-      - name: 📦 Cache Restore: Docker Layers
+      
+      - name: 📦 Cache Restore Docker Layers
         id: cache-docker-restore
         uses: actions/cache@v3
         with:
