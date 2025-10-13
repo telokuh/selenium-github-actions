@@ -85,7 +85,7 @@ jobs:
         run: |
           # 1. Mulai server VNC pada display :1
           echo ">>> Starting VNC server on :1..."
-          sudo -u ${USERNAME} vncserver :1 -geometry 1280x800 -depth 24 -localhost no
+          sudo -u ${USERNAME} vncserver :1 -geometry 800x800 -depth 24
 
           # 2. Mulai websockify (proxy VNC ke WebSocket)
           echo ">>> Starting noVNC websockify..."
@@ -110,6 +110,7 @@ jobs:
             sleep 300
           done
       - name: Clean up apt cache
+        if: always()
         run: |
           sudo rm -f /var/cache/apt/archives/lock
           sudo rm -f /var/lib/apt/lists/lock
