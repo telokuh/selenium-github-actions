@@ -10,7 +10,7 @@ jobs:
   setup-gui-runner:
     runs-on: ubuntu-latest
     env:
-      TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+      TAILSCALE_AUTHKEY: ${{ vars.AUTHKEY }}
       USERNAME: runner
       PASSWORD: runner
       TAILSCALE_HOSTNAME: gh-xfce-${{ github.run_id }}
