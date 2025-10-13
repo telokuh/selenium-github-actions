@@ -1,5 +1,0 @@
-xfce4
-xfce4-goodies
-xorg
-dbus-x11
-xrdp
