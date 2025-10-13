@@ -17,7 +17,7 @@ echo ">>> Menginstal Tailscale Repository..."
 curl -fsSL https://tailscale.com/install.sh | sudo sh
 
 echo ">>> Menginstal XFCE, VNC, noVNC tools, Tailscale client, dan XRDP..."
-sudo apt-get update -qq
+#sudo apt-get update -qq
 
 # Paket Instalasi (Ditambah xrdp)
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
