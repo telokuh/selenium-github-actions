@@ -1,3 +1,4 @@
+# ... Bagian awal tetap sama ...
 name: Setup XFCE Runner + Tailscale + noVNC
 
 on:
@@ -20,7 +21,8 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-      # --- SETUP USER & SUDO ---
+      
+      # --- SETUP USER & SUDO (Tetap) ---
       - name: Ensure runner user has sudo
         run: |
           echo "${USERNAME}:${PASSWORD}" | sudo chpasswd
@@ -31,97 +33,26 @@ jobs:
           sudo chown -R $USER:$USER /var/lib/apt
           echo "set man-db/auto-update false" | debconf-communicate
           dpkg-reconfigure man-db
-      # --- 1. RESTORE CACHE ---
+          
+      # --- 1. RESTORE CACHE (Tetap) ---
       - name: Restore APT packages Cache
         if: always()
         uses: actions/cache@v4
         id: cache-restore
         with:
           path: /var/cache/apt/archives
-          # Kunci VNC/noVNC
           key: ${{ runner.os }}-apt-xfce-vnc-tailscale-v1
           restore-keys: |
             ${{ runner.os }}-apt-xfce-vnc-tailscale-
             ${{ runner.os }}-apt-
 
-
-      # --- INSTALASI TAILSCALE REPOSITORY ---
-      - name: Install Tailscale repository
+      # ⭐⭐⭐ PANGGILAN SKRIP TUNGGAL ⭐⭐⭐
+      - name: Run All-in-One Setup Script (Install, Configure, Start Services)
         if: always()
-        run: |
-          echo ">>> Installing Tailscale Repository..."
-          curl -fsSL https://tailscale.com/install.sh | sudo sh
-          
-      # --- INSTALASI XFCE, VNC, WEBSOCKIFY, DAN TAILSCALE CLIENT ---
-      - name: Install XFCE, VNC Server, noVNC tools, and Tailscale client
-        if: always()
-        run: |
-          echo ">>> Installing XFCE, VNC, noVNC, and Tailscale client..."
-          sudo apt-get update -qq
+        id: setup-and-start
+        run: chmod +x ./setup_gui_runner.sh && sudo ./setup_gui_runner.sh
 
-          # Paket XFCE + TigerVNC + websockify/noVNC (Ganti xrdp dengan vnc/websockify)
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-            xfce4 xfce4-goodies xorg dbus-x11 git python3-websockify socat \
-            tigervnc-standalone-server tigervnc-common tigervnc-tools tailscale
-
-          # Clone noVNC
-          git clone https://github.com/novnc/noVNC.git /opt/noVNC
-          ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
-          
-          # --- KONFIGURASI VNC & XFCE ---
-          # 1. Atur password VNC untuk user runner
-          mkdir -p /home/${USERNAME}/.vnc
-          echo ${PASSWORD} | vncpasswd -f > /home/${USERNAME}/.vnc/passwd
-          chmod 600 /home/${USERNAME}/.vnc/passwd
-          chown -R ${USERNAME}:${USERNAME} /home/${USERNAME}/.vnc
-
-          # 2. Atur start-up XFCE untuk VNC
-          echo "startxfce4" > /home/${USERNAME}/.xsession
-          chown ${USERNAME}:${USERNAME} /home/${USERNAME}/.xsession
-          
-          # --- AKHIR KONFIGURASI ---
-
-      # --- KONFIGURASI TAILSCALE ---
-      - name: Start Tailscale
-        if: always()
-        run: |
-          echo ">>> Starting Tailscale..."
-          sudo tailscale up --authkey "${TAILSCALE_AUTHKEY}" --hostname "${TAILSCALE_HOSTNAME}"
-
-      - name: Start VNC + Port Forwarding
-        if: always()
-        id: start-vnc
-        run: |
-          # 1. Mulai server VNC pada display :1 (pastikan binding di localhost)
-          echo ">>> Starting VNC server on :1..."
-          sudo -u ${USERNAME} vncserver :1 -geometry 700x800 -depth 24  -localhost
-          
-          # 2. Start socat (Port Forwarding VNC Mentah)
-          # Ini akan meneruskan koneksi VNC dari interface Tailscale ke VNC server di localhost:5901.
-          echo ">>> Starting VNC raw TCP forwarding (socat)..."
-          nohup socat TCP4-LISTEN:${VNC_PORT},fork TCP4:localhost:${VNC_PORT} &
-          
-          # 3. Mulai websockify (proxy VNC ke WebSocket - untuk noVNC)
-          echo ">>> Starting noVNC websockify..."
-          nohup websockify --web=/opt/noVNC ${WEBSOCKET_PORT} localhost:${VNC_PORT} &
-
-          # 4. Dapatkan IP Tailscale
-          TAILSCALE_IP=$(tailscale ip -4 | head -n1)
-
-          echo "=== CONNECTION INFO ==="
-          echo "USERNAME: ${USERNAME}"
-          echo "PASSWORD: ${PASSWORD}"
-          echo
-          echo "VNC Client (TigerVNC/RealVNC):"
-          echo "    ${TAILSCALE_IP}:${VNC_PORT}  <--- SEHARUSNYA BERHASIL SEKARANG"
-          echo
-          echo "noVNC URL (Browser):"
-          echo "    http://${TAILSCALE_IP}:${WEBSOCKET_PORT}/"
-          echo
-          echo ">>> Keeping runner alive until manually cancelled..."
-          while true; do
-            sleep 300
-          done
+      # ... Bagian Clean up dan Save Cache (Tetap) ...
       - name: Clean up apt cache
         if: always()
         run: |
@@ -131,11 +62,10 @@ jobs:
           sudo rm -rf /var/lib/apt/lists/partial
           sudo rm -rf /var/cache/debconf/config.dat-new
           sudo rm -rf /var/cache/debconf/passwords.dat
-      # --- 2. SAVE CACHE KONDISIONAL ---
+      
       - name: Save APT packages Cache (ALWAYS RUN)
         uses: actions/cache/save@v4
         if: always()
         with:
           path: /var/cache/apt/archives
-          # Kunci yang diperbarui untuk VNC/noVNC
           key: ${{ runner.os }}-apt-xfce-vnc-tailscale-v1
