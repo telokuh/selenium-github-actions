@@ -88,7 +88,7 @@ jobs:
         run: |
           # 1. Mulai server VNC pada display :1 (pastikan binding di localhost)
           echo ">>> Starting VNC server on :1..."
-          sudo -u ${USERNAME} vncserver :1 -geometry 1280x800 -depth 24
+          sudo -u ${USERNAME} vncserver :1 -geometry 700x800 -depth 24  -localhost
           
           # 2. Start socat (Port Forwarding VNC Mentah)
           # Ini akan meneruskan koneksi VNC dari interface Tailscale ke VNC server di localhost:5901.
