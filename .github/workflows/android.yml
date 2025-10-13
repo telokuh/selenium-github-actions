@@ -59,7 +59,7 @@ jobs:
           sudo chown -R $USER:$USER /var/lib/tailscale
           
       # 4. TAILSCALE CACHE RESTORE
-      - name: 📦 Cache Restore: Tailscale State
+      - name: 📦 Cache Restore Tailscale State
         id: cache-ts-restore
         uses: actions/cache@v3
         with:
@@ -182,7 +182,7 @@ jobs:
       # --- 9. CLEANUP DAN CACHE SAVE (Dijalankan Selalu) ---
       
       # Tailscale State Save
-      - name: 📦 Cache Save: Tailscale State
+      - name: 📦 Cache Save Tailscale State
         uses: actions/cache/save@v3
         if: always() # Penting: Dijalankan meskipun job gagal/dibatalkan
         with:
@@ -190,7 +190,7 @@ jobs:
           key: ${{ runner.os }}-tailscale-${{ runner.arch }}-${{ env.TS_HOSTNAME }}-${{ github.sha }}
           
       # Docker Layer Save
-      - name: 📦 Cache Save: Docker Layers
+      - name: 📦 Cache Save Docker Layers
         uses: actions/cache/save@v3
         if: always() # Penting: Dijalankan meskipun job gagal/dibatalkan
         with:
