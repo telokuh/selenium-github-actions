@@ -1,4 +1,4 @@
-name: Docker KVM Android 13 Emulator via Tailscale (Final)
+name: Docker KVM Android 13 Emulator via Tailscale Final
 
 on:
   workflow_dispatch:
@@ -17,15 +17,15 @@ env:
   EMULATOR_BOOT_TIME: 30 # Waktu tunggu boot Emulator
   
 jobs:
-  run-docker-emulator:
+  run-docker-emulator: # Nama Job diubah
     runs-on: ubuntu-latest 
     timeout-minutes: 370
     
     steps:
       - uses: actions/checkout@v4
       
-      
-      - name: 📦 Cache Restore Docker Layers
+      # --- 1. DOCKER SETUP & CACHE RESTORE ---
+      - name: Cache Restore Docker Layers # Nama Step diubah
         id: cache-docker-restore
         uses: actions/cache@v3
         with:
@@ -34,16 +34,15 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-docker-
             
-      - name: Pull Docker Image (if not cached)
+      - name: Pull Docker Image if not cached
         if: steps.cache-docker-restore.outputs.cache-hit != 'true'
         run: |
           echo "Docker cache not hit. Pulling image..."
           docker pull ${{ env.DOCKER_IMAGE }}
-          # File penanda untuk cache berikutnya
           touch run-docker-image-key
 
       # 2. AKTIVASI KVM DI HOST RUNNER
-      - name: ⚙️ Enable KVM Hardware Acceleration
+      - name: Enable KVM Hardware Acceleration # Nama Step diubah
         run: |
           echo ">>> Enabling KVM permissions on host..."
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -52,14 +51,14 @@ jobs:
           sudo usermod -aG kvm $USER
           
       # 3. TAILSCALE INSTALL
-      - name: 🔗 Install Tailscale
+      - name: Install Tailscale
         run: |
           echo ">>> Installing Tailscale on Host..."
           curl -fsSL https://tailscale.com/install.sh | sudo sh
           sudo chown -R $USER:$USER /var/lib/tailscale
           
       # 4. TAILSCALE CACHE RESTORE
-      - name: 📦 Cache Restore Tailscale State
+      - name: Cache Restore Tailscale State # Nama Step diubah
         id: cache-ts-restore
         uses: actions/cache@v3
         with:
@@ -69,7 +68,7 @@ jobs:
             ${{ runner.os }}-tailscale-${{ runner.arch }}-${{ env.TS_HOSTNAME }}-
             
       # 5. TAILSCALE UP (Background Run & Non-blocking)
-      - name: 🔗 Tailscale up (Background Run)
+      - name: Tailscale up Background Run # Nama Step diubah
         run: |
           AUTH_KEY="${{ vars.AUTHKEY }}"
           
@@ -90,7 +89,6 @@ jobs:
           fi
           
           echo ">>> Connecting Tailscale (non-blocking)..."
-          # Gunakan --timeout=1 untuk mencegah blocking lebih dari 1 menit
           sudo tailscale up \
             $AUTH_PARAM \
             --hostname ${{ env.TS_HOSTNAME }} \
@@ -102,7 +100,7 @@ jobs:
           sleep 5
 
       # 6. MENJALANKAN DOCKER EMULATOR
-      - name: 🐳 Run Docker Android Emulator
+      - name: Run Docker Android Emulator # Nama Step diubah
         id: run-docker
         run: |
           echo ">>> Running Docker Emulator..."
@@ -132,10 +130,9 @@ jobs:
           fi
 
       # 7. MENJALANKAN WEBSOCKIFY SECARA MANUAL
-      - name: 🚀 Manual noVNC/Websockify Startup (Path Fix)
+      - name: Manual noVNC Websockify Startup Path Fix # Nama Step diubah
         run: |
           echo ">>> Container is running. Starting websockify manually..."
-          # Menggunakan jalur yang dikoreksi: /usr/local/bin/websockify
           docker exec -d android-emu /usr/local/bin/websockify ${{ env.NOVNC_PORT }} localhost:5901
           
           echo "Websockify started on port ${{ env.NOVNC_PORT }}."
@@ -145,7 +142,6 @@ jobs:
       - name: Show Connection URL and Keep Alive
         run: |
           echo "Menunggu Tailscale Online..."
-          # Beri batas waktu 30 detik untuk koneksi Tailscale
           for i in $(seq 1 30); do
               if /usr/bin/tailscale status --json | jq -e '.Self.Online' > /dev/null; then
                   break
@@ -181,32 +177,37 @@ jobs:
 
       # --- 9. CLEANUP DAN CACHE SAVE (Dijalankan Selalu) ---
       
+      # Perbaiki Perizinan Docker
+      - name: Fix Docker Cache Permissions
+        if: always()
+        run: |
+          echo ">>> Temporarily fixing permissions for cache save..."
+          sudo chown -R $USER:$USER /var/lib/docker || true
+          
       # Tailscale State Save
-      - name: 📦 Cache Save Tailscale State
+      - name: Cache Save Tailscale State
         uses: actions/cache/save@v3
-        if: always() # Penting: Dijalankan meskipun job gagal/dibatalkan
+        if: always()
         with:
           path: /var/lib/tailscale
           key: ${{ runner.os }}-tailscale-${{ runner.arch }}-${{ env.TS_HOSTNAME }}-${{ github.sha }}
           
       # Docker Layer Save
-      - name: 📦 Cache Save Docker Layers
+      - name: Cache Save Docker Layers
         uses: actions/cache/save@v3
-        if: always() # Penting: Dijalankan meskipun job gagal/dibatalkan
+        if: always()
         with:
           path: /var/lib/docker
           key: ${{ runner.os }}-docker-${{ hashFiles('run-docker-image-key') }} 
           
       # Logout dan Hapus Container
-      - name: 🗑️ Cleanup Tailscale and Docker
-        if: always() # Penting: Dijalankan meskipun job gagal/dibatalkan
+      - name: Cleanup Tailscale and Docker
+        if: always()
         run: |
           echo ">>> Running cleanup (Tailscale logout, Docker stop)."
-          # Logout Tailscale dari runner saat ini
           sudo tailscale down || true
           sudo tailscale logout || true
           
-          # Hapus container Docker jika masih ada
           docker rm -f android-emu || true
           
           echo "Cleanup Complete."
