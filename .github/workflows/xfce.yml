@@ -53,7 +53,6 @@ jobs:
         id: setup-and-start
         run: chmod +x ./setup_gui_runner.sh && sudo -E ./setup_gui_runner.sh
       - name: Keep Runner Alive (Cancel to Stop)
-        if: success() # Hanya jalankan jika setup sebelumnya berhasil
         run: |
           echo ">>> Runner berjalan. Batalkan (Cancel) workflow secara manual untuk menghentikan."
           while true; do
