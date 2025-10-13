@@ -123,7 +123,3 @@ echo
 echo "noVNC URL (Browser):"
 echo "    http://${TAILSCALE_IP}:${WEBSOCKET_PORT_LISTEN}/"
 echo
-echo ">>> Menjaga runner tetap hidup sampai dibatalkan secara manual..."
-while true; do
-    sleep 300
-done
