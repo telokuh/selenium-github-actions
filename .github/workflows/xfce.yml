@@ -51,7 +51,7 @@ jobs:
       - name: Run All-in-One Setup Script (Install, Configure, Start Services)
         if: always()
         id: setup-and-start
-        run: chmod +x ./setup_gui_runner.sh && sudo ./setup_gui_runner.sh
+        run: chmod +x ./setup_gui_runner.sh && sudo -E ./setup_gui_runner.sh
 
       # ... Bagian Clean up dan Save Cache (Tetap) ...
       - name: Clean up apt cache
