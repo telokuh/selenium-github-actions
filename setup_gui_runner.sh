@@ -115,7 +115,7 @@ nohup websockify --web=/opt/noVNC ${WEBSOCKET_REAL_PORT} localhost:${VNC_REAL_PO
 echo ">>> Mengaktifkan Tailscale Serve untuk noVNC di HTTPS (Port 443)..."
 # Tailscale Serve akan menerima koneksi HTTPS di Port 443 dan meneruskannya ke localhost:6080
 sudo tailscale serve --https=443 http://localhost:${WEBSOCKET_REAL_PORT} &
- 
+sudo tailscale set --serve
 # 5. Dapatkan IP dan Hostname Tailscale
 TAILSCALE_IP=$(tailscale ip -4 | head -n1)
 # Menggunakan hostname statis yang kita tentukan
