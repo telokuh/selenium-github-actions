@@ -18,13 +18,26 @@ echo "=================================================="
 
 # --- INSTALASI TAILSCALE REPOSITORY SECARA MANUAL UNTUK CACHING ---
 echo ">>> Menambahkan Tailscale GPG key dan Repository ke APT..."
-# Ini adalah langkah yang lebih ramah cache APT
-sudo install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg | sudo tee /etc/apt/keyrings/tailscale.gpg >/dev/null
-curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list
 
+# Pasang lsb-release dan gpg (sering diperlukan di runner baru)
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+  lsb-release gpg
+
+# Dapatkan nama kode OS secara dinamis (misalnya 'noble')
+UBUNTU_CODENAME=$(lsb-release -cs)
+echo "Dideteksi Ubuntu Codename: $UBUNTU_CODENAME"
+
+# 1. Tambahkan GPG key resmi Tailscale dan simpan di lokasi standar
+# Menggunakan opsi 'dearmor' untuk mengkonversi key ke format yang dapat dibaca oleh APT
+curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg | sudo gpg --dearmor -o /usr/share/keyrings/tailscale-archive-keyring.gpg
+
+# 2. Tambahkan repo ke sources.list.d menggunakan nama kode OS yang benar
+echo "deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu ${UBUNTU_CODENAME} main" | sudo tee /etc/apt/sources.list.d/tailscale.list > /dev/null
+
+# --- LANJUT KE LANGKAH INSTALASI APT ---
 echo ">>> Menginstal XFCE, VNC, noVNC tools, Tailscale client, dan XRDP..."
 sudo apt-get update -qq
+
 
 # Paket Instalasi (Ditambah xrdp)
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
