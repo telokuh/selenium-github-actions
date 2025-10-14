@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   setup-gui-runner:
-    runs-on: ubuntu-24.10
+    runs-on: ubuntu-latest
     env:
       TAILSCALE_AUTHKEY: ${{ vars.AUTHKEY }}
       USERNAME: runner
