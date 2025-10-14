@@ -21,10 +21,10 @@ echo ">>> Menambahkan Tailscale GPG key dan Repository ke APT..."
 
 # Pasang lsb-release dan gpg (sering diperlukan di runner baru)
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-  lsb-release gpg
+   gpg
 
 # Dapatkan nama kode OS secara dinamis (misalnya 'noble')
-UBUNTU_CODENAME=$(lsb-release -cs)
+UBUNTU_CODENAME=noble 
 echo "Dideteksi Ubuntu Codename: $UBUNTU_CODENAME"
 
 # 1. Tambahkan GPG key resmi Tailscale dan simpan di lokasi standar
